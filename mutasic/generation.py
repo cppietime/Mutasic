@@ -6,6 +6,8 @@ import enum, math, random, typing
 import mido
 import numpy as np
 
+from mutasic import musicrep
+
 major_scale = [0, 2, 4, 5, 7, 9, 11]
 minor_scale = [0, 2, 3, 5, 7, 8, 10]
 harmonic_minor_scale = [0, 2, 3, 5, 7, 8, 11]
@@ -283,7 +285,7 @@ class Measure():
         copy.mutant = self.mutant
         return copy
     
-    def note_on(self, note, velocity, pitch_bends, free_channels, delta_time, msg_target):
+    def note_on_midi(self, note, velocity, pitch_bends, free_channels, delta_time, msg_target):
         if not self.context.microtonal:
             msg_target(mido.Message('note_on', note=int(note), channel=0, velocity=velocity, time=delta_time))
             return
@@ -300,7 +302,7 @@ class Measure():
             pitch_bends[pitch_bend] = [channel, 1]
         msg_target(mido.Message('note_on', note=int(note), channel=channel, velocity=velocity, time=delta_time))
     
-    def note_off(self, note, pitch_bends, free_channels, delta_time, msg_target):
+    def note_off_midi(self, note, pitch_bends, free_channels, delta_time, msg_target):
         if not self.context.microtonal:
             msg_target(mido.Message('note_off', note=int(note), channel=0, time=delta_time))
             return
@@ -318,6 +320,14 @@ class Measure():
             channel = 0
         msg_target(mido.Message('note_off', note=int(note), channel=channel, time=delta_time))
     
+    def note_on_score(self, note, velocity, voice, delta_time, msg_target):
+        message = musicrep.NoteMessage(note, velocity, True, voice, delta_time)
+        msg_target(message)
+    
+    def note_off_score(self, note, voice, delta_time, msg_target):
+        message = musicrep.NoteMessage(note, 0, False, voice, delta_time)
+        msg_target(message)
+    
     def play(self, parent_base, wait, msg_target, realtime=True, delta_time=0, play_chords=True, play_drums=True, pitch_bends=None, free_channels=None):
         if pitch_bends is None:
             pitch_bends = {}
@@ -330,7 +340,8 @@ class Measure():
                 current_chord = parent_base
                 for note_i, note in enumerate(current_chord):
                     #msg_target(mido.Message('note_on', note = note + self.context.base_note, channel=0, velocity = 63 >> note_i, time = delta_time))
-                    self.note_on(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                    #self.note_on_midi(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                    self.note_on_score(note + self.context.base_note, 63 >> note_i, 0, delta_time, msg_target)
                     delta_time = 0
             
             last_notes = set()
@@ -338,12 +349,14 @@ class Measure():
                 if self.shift[i] is not None and play_chords: # Play the new chord
                     for note in current_chord:
                         #msg_target(mido.Message('note_off', note = note + self.context.base_note, channel=0, time = delta_time))
-                        self.note_off(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                        #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                        self.note_off_score(note + self.context.base_note, 0, delta_time, msg_target)
                         delta_time = 0
                     current_chord = self.shift[i]
                     for note_i, note in enumerate(current_chord):
                         #msg_target(mido.Message('note_on', note = note + self.context.base_note, channel=0, velocity = 63 >> note_i, time = delta_time))
-                        self.note_on(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                        #self.note_on_midi(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                        self.note_on_score(note + self.context.base_note, 63 >> note_i, 0, delta_time, msg_target)
                         delta_time = 0
                 voices = self.children[i]
                 new_notes = []
@@ -353,12 +366,14 @@ class Measure():
                     for note, voice in last_notes: # Kill dead notes
                         if note not in chord and v == voice:
                             #msg_target(mido.Message('note_off', note = note + note_offset, channel = channel, time = delta_time))
-                            self.note_off(note + note_offset, pitch_bends, free_channels, delta_time, msg_target)
+                            #self.note_off_midi(note + note_offset, pitch_bends, free_channels, delta_time, msg_target)
+                            self.note_off_score(note + note_offset, channel, delta_time, msg_target)
                             delta_time = 0
                     for note_i, note in enumerate(chord): # Play new notes
                         if (note, v) not in last_notes:
                             #msg_target(mido.Message('note_on', note = note + note_offset, channel = channel, velocity = 63 >> note_i, time = delta_time))
-                            self.note_on(note + note_offset, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                            #self.note_on_midi(note + note_offset, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
+                            self.note_on_score(note + note_offset, 63 >> note_i, channel, delta_time, msg_target)
                             delta_time = 0
                         new_notes.append((note, v))
                 last_notes = new_notes
@@ -367,7 +382,8 @@ class Measure():
                 if not play_drums:
                     drum = 0
                 if drum != 0: # Play drums if any
-                    msg_target(mido.Message('note_on', note = drum, channel = 9, velocity = 63, time = delta_time))
+                    #msg_target(mido.Message('note_on', note = drum, channel = 9, velocity = 63, time = delta_time))
+                    self.note_on_score(drum, 63, -1, delta_time, msg_target)
                     delta_time = 0
                     
                 if realtime: # Wait if we're playing in real-time
@@ -375,13 +391,15 @@ class Measure():
                 delta_time = int(delta_time + wait)
                 
                 if drum != 0: # Kill the drum if we played it
-                    msg_target(mido.Message('note_off', note = drum, channel = 9, time = delta_time))
+                    #msg_target(mido.Message('note_off', note = drum, channel = 9, time = delta_time))
+                    self.note_off_score(drum, -1, delta_time, msg_target)
                     delta_time = 0
             
             if play_chords:
                 for note in current_chord: # Kill remaining chord notes
                     #msg_target(mido.Message('note_off', note = note + self.context.base_note, channel=0, time = delta_time))
-                    self.note_off(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                    #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                    self.note_off_score(note + self.context.base_note, 0, delta_time, msg_target)
                     delta_time = 0
             
             for note, voice in last_notes: # Kill remaining melody notes
@@ -390,7 +408,8 @@ class Measure():
                 #    note = note + self.context.base_note + self.context.voices[voice].base_note,
                 #    channel = self.context.voices[voice].channel,
                 #    time = delta_time))
-                self.note_off(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
+                self.note_off_score(note + self.context.base_note, self.context.voices[voice].channel, delta_time, msg_target)
                 delta_time = 0
         else: # Recursively play children nodes
             for child in self.children:

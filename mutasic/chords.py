@@ -7,6 +7,7 @@ from os import path
 import mido
 import numpy as np
 
+from mutasic import musicrep
 from mutasic.generation import (
     ScaleModes,
     Note,
@@ -32,7 +33,7 @@ def play_drums(output, wait = 1):
         time.sleep(wait)
         output.send(mido.Message('note_off', channel = 9, note = i))
 
-def create_midi(melody_scale_name='major',
+def create_score(melody_scale_name='major',
                 melody_scale_mode='IONIAN',
                 melody_starting_note='C',
                 num_melody_octaves=2,
@@ -76,14 +77,16 @@ def create_midi(melody_scale_name='major',
         chord_instability=chord_instability,
         voices=[Voice(i+1, 1, 0) for i in range(voices)])
     root = Measure(depth, [0], context)
-    mid = mido.MidiFile()
-    track = mido.MidiTrack()
-    mid.tracks.append(track)
-    track.append(mido.MetaMessage('set_tempo', tempo=tempo))
-    mid.ticks_per_beat = tpb
-    root.play(root.base, 1, lambda msg: track.append(msg), realtime = False, play_chords = play_chords, play_drums = play_drums)
+    #mid = mido.MidiFile()
+    #track = mido.MidiTrack()
+    #mid.tracks.append(track)
+    #track.append(mido.MetaMessage('set_tempo', tempo=tempo))
+    #mid.ticks_per_beat = tpb
+    score = musicrep.Score(tpb, tempo)
+    root.play(root.base, 1, lambda msg: score.append(msg), realtime = False, play_chords = play_chords, play_drums = play_drums)
     # track.append(mido.Message('note_off', note=0, channel=0, time=mid.ticks_per_beat))
-    return mid
+    #return mid
+    return score
 
 def play_rt(midi):
     port = mido.open_output()
@@ -122,7 +125,7 @@ def create_cmd():
     print(f'seed={args.seed}', file=sys.stderr)
     random.seed(args.seed)
     for i in range(args.times):
-        mid = create_midi(args.melody_scale,
+        score = create_score(args.melody_scale,
                           args.mode,
                           args.scale_base,
                           args.octaves,
@@ -140,6 +143,7 @@ def create_cmd():
                           args.voices,
                           not args.omit_chords,
                           args.drums)
+        mid = score.to_midi(True)
         if args.output:
             output = args.output
             if args.times > 1:
@@ -157,20 +161,18 @@ class PatternPiece:
     '''One melodic/bass piece of a pattern. Stacked up to make states.
     Upon initialization, all tracks are merged together.
     '''
-    def __init__(self, midifile, microtonal=False):
-        self.length = 0
+    def __init__(self, score, microtonal=False):
         self.msgs = []
         self.microtonal = microtonal
         uniq_chans = set()
-        for track in midifile.tracks:
-            time = 0
-            for msg in track:
-                time += msg.time
-                if hasattr(msg, 'channel'):
-                    self.msgs.append((time, msg))
-                    if msg.channel != 9:
-                        uniq_chans.add(msg.channel)
-            self.length = max(self.length, time)
+        time = 0
+        score.convert(musicrep.ScoreTimeMode.RELATIVE)
+        for msg in score.messages:
+            time += msg.time
+            self.msgs.append((time, msg))
+            if msg.voice != -1:
+                uniq_chans.add(msg.voice)
+        self.length = time
         self.msgs.sort(key = lambda x: x[0])
         self.timescale = 1
         self.num_channels = len(uniq_chans)
@@ -181,7 +183,7 @@ class PatternState:
     bass: PatternPiece
     melodies: list[int] # 6 long
     
-    def write(self, track, energy, melodies, base_channel=0):
+    def write(self, score, energy, melodies, base_channel=0):
         microtonal = any(map(lambda x: x.microtonal, melodies))
         mel_energy = {}
         channels = {}
@@ -202,14 +204,10 @@ class PatternState:
                     break
                 message = message[1].copy()
                 message.time = delta_time
-                if hasattr(message, 'channel') and message.channel != 9:
-                    if microtonal:
-                        pass
-                    else:
-                        message.channel = 0
-                message.channel += channel
+                if message.voice != 9:
+                    message.voice = base_channel
                 delta_time = 0
-                track.append(message)
+                score.append(message)
                 index += 1
             channel += self.bass.num_channels
             for mel, nrg in mel_energy.items():
@@ -220,23 +218,18 @@ class PatternState:
                         break
                     message = message[1].copy()
                     message.time = delta_time
-                    if hasattr(message, 'channel') and message.channel != 9:
-                        if microtonal:
-                            pass
-                        else:
-                            message.channel = channels[mel]
-                        message.channel += channel
+                    if message.voice != 9:
+                        message.voice = channels[mel] + base_channel
                     delta_time = 0
-                    track.append(message)
-                    if hasattr(message, 'channel') and nrg >= 1:
+                    score.append(message)
+                    if nrg >= 1:
                         message = message.copy()
                         message.time = delta_time
-                        if hasattr(message, 'note'):
-                            if message.note < 127 - 12:
-                                message.note += 12 # 1 octave up
-                            else:
-                                message.note -= 12
-                        track.append(message)
+                        if message.frequency < 127 - 12:
+                            message.frequency += 12 # 1 octave up
+                        else:
+                            message.frequency -= 12
+                        score.append(message)
                     indices[mel] += 1
                 channel += melody.num_channels
             time += 1
@@ -299,24 +292,18 @@ def generate_pattern(state_length, num_states, transition_pow, basses, melodies,
         states.append(PatternState(bass, mel_ids))
     
     state_id = 0
-    track = mido.MidiTrack()
-    track.append(mido.MetaMessage('set_tempo', tempo=tempo))
-    notes = []
-    for i in range(127):
-        notes += [i, 60, 63, 0]
-    track.append(mido.Message('sysex', data=(0x7F, 0, 8, 2, 0, 127) + tuple(notes)))
-    track.append(mido.Message('control_change', control=64, value=3))
-    track.append(mido.Message('control_change', control=65, value=0))
-    track.append(mido.Message('control_change', control=6, value=0))
-    for i in range(7):
-        track.append(mido.Message('program_change', channel=i, program=i));
+    #track = mido.MidiTrack()
+    #track.append(mido.MetaMessage('set_tempo', tempo=tempo))
+    score = musicrep.Score(0, tempo)
+    #for i in range(7):
+    #    track.append(mido.Message('program_change', channel=i, program=i));
     for _, nrg in enumerate(energy):
         state = states[state_id]
         for __ in range(repeat):
-            state.write(track, nrg, melodies)
+            state.write(score, nrg, melodies)
         state_id = random.choices(range(num_states), weights=markov_chain[state_id,:])[0]
         
-    return track
+    return score
 
 def pattern_cmd():
     bass_names = sys.argv[2].split(',')
@@ -381,7 +368,7 @@ def auto_cmd():
     random.seed(args.seed)
     basses, melodies = [], []
     for _ in range(args.basses):
-        basses.append(PatternPiece(create_midi(args.melody_scale,
+        basses.append(PatternPiece(create_score(args.melody_scale,
                           args.mode,
                           args.scale_base,
                           args.octaves,
@@ -400,7 +387,7 @@ def auto_cmd():
                           not args.omit_chords,
                           args.drums)))
     for _ in range(args.melodies):
-        melodies.append(PatternPiece(create_midi(args.melody_scale,
+        melodies.append(PatternPiece(create_score(args.melody_scale,
                           args.mode,
                           args.scale_base,
                           args.octaves,
@@ -418,10 +405,12 @@ def auto_cmd():
                           args.voices,
                           not args.omit_chords,
                           False)))
-    track = generate_pattern(args.length, args.states, args.power, basses, melodies, args.walk, args.tempo, args.intro_limit, args.repeat)
-    mid = mido.MidiFile()
-    mid.tracks.append(track)
-    mid.ticks_per_beat = args.ticks_per_beat
+    score = generate_pattern(args.length, args.states, args.power, basses, melodies, args.walk, args.tempo, args.intro_limit, args.repeat)
+    score.ticks_per_beat = args.ticks_per_beat
+    mid = score.to_midi(True)
+    #mid = mido.MidiFile()
+    #mid.tracks.append(track)
+    #mid.ticks_per_beat = args.ticks_per_beat
     if args.output:
         mid.save(args.output)
     else:
