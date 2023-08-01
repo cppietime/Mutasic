@@ -77,15 +77,8 @@ def create_score(melody_scale_name='major',
         chord_instability=chord_instability,
         voices=[Voice(i+1, 1, 0) for i in range(voices)])
     root = Measure(depth, [0], context)
-    #mid = mido.MidiFile()
-    #track = mido.MidiTrack()
-    #mid.tracks.append(track)
-    #track.append(mido.MetaMessage('set_tempo', tempo=tempo))
-    #mid.ticks_per_beat = tpb
     score = musicrep.Score(tpb, tempo)
     root.play(root.base, 1, lambda msg: score.append(msg), realtime = False, play_chords = play_chords, play_drums = play_drums)
-    # track.append(mido.Message('note_off', note=0, channel=0, time=mid.ticks_per_beat))
-    #return mid
     return score
 
 def play_rt(midi):
@@ -94,8 +87,30 @@ def play_rt(midi):
         port.send(msg)
     port.close()
 
-def create_cmd():
-    parser = argparse.ArgumentParser('Create a MIDI song')
+def handle_score(score, args):
+    if args.midi:
+        if args.ascii:
+            raise ValueError('--ascii and --midi are mutually exclusive')
+        mid = score.to_midi(True)
+        if args.output:
+            output = args.output
+            if args.times > 1:
+                output = path.splitext(output)
+                base = f'{output[0]}_{i:05}'
+                output = base + output[1]
+            mid.save(output)
+        else:
+            play_rt(mid)
+            output = input('Name of saved midi file? [blank to discard] > ')
+            if output:
+                mid.save(output)
+    elif args.output:
+        score.save(args.output, not args.ascii)
+    else:
+        score.save(sys.stdout.buffer, not args.ascii)
+
+def basic_parser(desc):
+    parser = argparse.ArgumentParser(desc)
     parser.add_argument('--melody_scale', '-s', type=str, default='major', help='Name of scale')
     parser.add_argument('--octaves', type=int, default=2)
     parser.add_argument('--mode', type=str, default='IONIAN')
@@ -117,6 +132,12 @@ def create_cmd():
     parser.add_argument('--output', type=str)
     parser.add_argument('--times', type=int, default=1)
     parser.add_argument('--drums', action='store_true')
+    parser.add_argument('--midi', '-M', action='store_true')
+    parser.add_argument('--ascii', '-A', action='store_true')
+    return parser
+
+def create_cmd():
+    parser = basic_parser('Create a MIDI song')
     args = parser.parse_args(sys.argv[2:])
     if not args.chord_scale:
         args.chord_scale = args.melody_scale
@@ -143,19 +164,8 @@ def create_cmd():
                           args.voices,
                           not args.omit_chords,
                           args.drums)
-        mid = score.to_midi(True)
-        if args.output:
-            output = args.output
-            if args.times > 1:
-                output = path.splitext(output)
-                base = f'{output[0]}_{i:05}'
-                output = base + output[1]
-            mid.save(output)
-        else:
-            play_rt(mid)
-            output = input('Name of saved midi file? [blank to discard] > ')
-            if output:
-                mid.save(output)
+        handle_score(score, args)
+        score.to_wav('test.wav')
 
 class PatternPiece:
     '''One melodic/bass piece of a pattern. Stacked up to make states.
@@ -204,7 +214,7 @@ class PatternState:
                     break
                 message = message[1].copy()
                 message.time = delta_time
-                if message.voice != 9:
+                if message.voice != -1:
                     message.voice = base_channel
                 delta_time = 0
                 score.append(message)
@@ -218,7 +228,7 @@ class PatternState:
                         break
                     message = message[1].copy()
                     message.time = delta_time
-                    if message.voice != 9:
+                    if message.voice != -1:
                         message.voice = channels[mel] + base_channel
                     delta_time = 0
                     score.append(message)
@@ -269,8 +279,6 @@ def generate_pattern(state_length, num_states, transition_pow, basses, melodies,
         state /= state.sum()
     
     # Set timescales
-    #basses = tuple(map(PatternPiece, basses))
-    #melodies = tuple(map(PatternPiece, melodies))
     max_len = 0
     for piece in tuple(basses) + tuple(melodies):
         max_len = max(max_len, piece.length)
@@ -292,11 +300,7 @@ def generate_pattern(state_length, num_states, transition_pow, basses, melodies,
         states.append(PatternState(bass, mel_ids))
     
     state_id = 0
-    #track = mido.MidiTrack()
-    #track.append(mido.MetaMessage('set_tempo', tempo=tempo))
     score = musicrep.Score(0, tempo)
-    #for i in range(7):
-    #    track.append(mido.Message('program_change', channel=i, program=i));
     for _, nrg in enumerate(energy):
         state = states[state_id]
         for __ in range(repeat):
@@ -329,36 +333,16 @@ def pattern_cmd():
     midi.save('pattern.mid')
 
 def auto_cmd():
-    parser = argparse.ArgumentParser('Create a MIDI song')
-    parser.add_argument('--melody_scale', '-s', type=str, default='major', help='Name of scale')
-    parser.add_argument('--octaves', type=int, default=2)
-    parser.add_argument('--mode', type=str, default='IONIAN')
-    parser.add_argument('--scale_base', type=str, default='C')
-    parser.add_argument('--min_chord', type=int, default=2)
-    parser.add_argument('--max_chord', type=int, default=3)
-    parser.add_argument('--chord_scale', type=str, default=None)
-    parser.add_argument('--jazz_on', type=float, default=.1)
-    parser.add_argument('--jazz_off', type=float, default=.2)
-    parser.add_argument('--base_note', type=int, default=42)
-    parser.add_argument('--mutation', type=float, default=.8)
-    parser.add_argument('--instability', type=float, default=.125)
-    parser.add_argument('--tempo', type=int, default=1_000_000)
-    parser.add_argument('--ticks_per_beat', type=int, default=8)
-    parser.add_argument('--depth', '-n', type=int, default=1)
-    parser.add_argument('--seed', '-x', type=int, default=None)
-    parser.add_argument('--voices', type=int, default=1)
-    parser.add_argument('--omit_chords', action='store_true')
-    parser.add_argument('--output', type=str)
-    parser.add_argument('--basses', type=int, default=1)
-    parser.add_argument('--melodies', type=int, default=1)
-    parser.add_argument('--states', type=int, default=1)
-    parser.add_argument('--length', type=int, default=1)
-    parser.add_argument('--power', type=float, default=1)
-    parser.add_argument('--drums', action='store_true')
+    parser = basic_parser('Compose a piece')
     parser.add_argument('--walk', type=int, default=2)
     parser.add_argument('--octave_distance', type=int, default=1)
     parser.add_argument('--intro_limit', type=int, default=2)
     parser.add_argument('--repeat', type=int, default=1)
+    parser.add_argument('--length', type=int, default=1)
+    parser.add_argument('--states', type=int, default=1)
+    parser.add_argument('--basses', type=int, default=1)
+    parser.add_argument('--melodies', type=int, default=1)
+    parser.add_argument('--power', type=float, default=1)
     args = parser.parse_args(sys.argv[2:])
     if not args.chord_scale:
         args.chord_scale = args.melody_scale
@@ -407,17 +391,13 @@ def auto_cmd():
                           False)))
     score = generate_pattern(args.length, args.states, args.power, basses, melodies, args.walk, args.tempo, args.intro_limit, args.repeat)
     score.ticks_per_beat = args.ticks_per_beat
-    mid = score.to_midi(True)
-    #mid = mido.MidiFile()
-    #mid.tracks.append(track)
-    #mid.ticks_per_beat = args.ticks_per_beat
-    if args.output:
-        mid.save(args.output)
-    else:
-        play_rt(mid)
-        output = input('Enter filename to save [blank to discard]: ')
-        if output:
-            mid.save(output)
+    handle_score(score, args)
+
+def score2wav_cmd():
+    src = sys.argv[2]
+    dst = sys.argv[3]
+    score = musicrep.Score.load(src)
+    score.to_wav(dst)
 
 def main():
     if len(sys.argv) < 2:
@@ -430,6 +410,8 @@ def main():
         pattern_cmd()
     elif command == 'compose':
         auto_cmd()
+    elif command == 'score2wav':
+        score2wav_cmd()
     else:
         print(f'Unspecified command {command}')
         sys.exit(1)

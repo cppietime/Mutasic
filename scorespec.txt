@@ -1,0 +1,256 @@
+Digital score format:
+
+ASCII mode:
+4cc: dscA
+dscA\s
+<usec_per_beat>\s <ticks_per_beat>\s
+<voice min incl>\s <voice max incl>\s
+<maximum time tick>\s
+<# messages>
+(per message:)
+\s <time>\s <amplitude>\s <frequency>\s <voice>\s
+
+Binary mode:
+4cc: dscB
+offset  size    value
+0       4       dscB
+4       4       total file size in bytes or 0 if unknown
+8       4       usec_per_beat
+12      2       ticks_per_beat
+14      1       reference note number
+15      1       reference note octlets
+16      4       reference note frequency in hz
+20      2       min voice incl
+22      2       max voice incl
+24      4       max time tick
+38      4       # messages
+per message:
+variable length delta time
+0       2       voice
+2       1       amplitude, 0 for NOTE_OFF
+3       1       note number: hi bit 7 indicates cents follow
+4?      1       note octlets
+4/5     n       #extra bytes, variable length
+extra bytes?...
+
+Orchestration specs:
+note data -> custom function -> sound data
+function call inputs:
+time since note start: note_time (signal of sample counts?),
+time since note ended: note_dead_time,
+
+per-note constants:
+note frequency: note_num (int), note_octlets (int),
+note amplitude: note_amp (float),
+extra params: note_extra (int list), note_extra_num(int),
+note voice: note_voice (int)
+
+global readonlies:
+global time: glob_time (signal of sample counts),
+current number of notes active: active_notes (int)
+
+global constants:
+sample rate: samplerate (int),
+control rate: block_size (int),
+num channels: num_channels (int)
+
+outputs:
+output: sound output (fm),
+keep_alive: last sample in control block the note is still alive (int, default to when note dies?)
+
+m: message (control block size)
+1: scalar
+a: array (arbitrary size)
+
+e.g. pure sine wave
+f1 freq = m2hz(note_num, note_octlets);
+fm phase = note_time * freq / samplerate * 2 * PI;
+fm wave = sin(phase);
+output = wave * note_amp * (note_dead_time ? 0 : 1);
+keep_alive = first_nonzero(note_dead_time); // This may become unnecessary
+
+e.g. sawtooth wave with ADSR
+f1 freq = m2hz(note_num, note_octlets);
+fm phase = note_time * freq / samplerate;
+fm wave = (phase % 1) * 2 - 1;
+f1 attack = .1 * samplerate;
+f1 decay = .1 * samplerate;
+f1 sustain = .8;
+f1 release = .25 * samplerate;
+fm amp = ((note_time < attack) * note_time / attack) +
+    ((note_time >= attack) * (note_time < attack + decay) * (note_time - attack) * (sustain - 1) + 1) +
+    ((note_time >= attack + decay) * (note_dead_time == 0) * sustain) +
+    (note_dead_time / release * -sustain + sustain);
+output = wave * amp;
+keep_alive = first_nonzero(note_dead_time > release);
+
+e.g. sawtooth wave with IIR filter
+f1 freq = m2hz(note_num, note_octlets);
+fm phase = note_time * freq / samplerate;
+fm wave = (phase % 1) * 2 - 1;
+f1 cutoff_freq = 2000;
+i1 n = 2;
+fa iir_coeffs = butterworth_lp(cutoff_freq, 2);
+fm filtered = iir_filter(wave, iir_coeffs, "filteri", "filtero");
+fm amp = (note_dead_time == 0) * note_amp;
+output = filtered * amp;
+keep_alive = first_nonzero(note_dead_time > release);
+
+e.g. sawtooth wave with interpolating IIR filter
+f1 freq = m2hz(note_num, note_octlets);
+fm phase = note_time * freq / samplerate;
+fm wave = (phase % 1) * 2 - 1;
+f1 cutoff_freq0 = 2000 + note_time[0];
+f1 cutoff_freq1 = cutoff_freq0 + block_size;
+i1 n = 2;
+fa iir_coeffs0 = butterworth_lp(cutoff_freq0, 2);
+fa iir_coeffs1 = butterworth_lp(cutoff_freq1, 2);
+fm filtered0 = iir_filter(wave, iir_coeffs0, "filter0");
+fm filtered1 = iir_filter(wave, iir_coeffs1, "filter1");
+fm z = (note_time - note_time[0]) / block_size;
+fm lerped = filtered0 + (filtered1 - filtered0) * z;
+fm amp = (note_dead_time == 0) * note_amp;
+output = lerped * amp;
+keep_alive = first_nonzero(note_dead_time > release);
+
+e.g. in-lang implementation of iir_filter
+fm iir_filter(fm input, fa iir_coeffs, key bufferkey) {
+    i1 n2m1 = iir_coeffs.length;
+    i1 order = (n2m1 + 1) / 2;
+    fm output = 0;
+    for (i1 i = 0; i < block_size; i++) {
+        f1 sample = input[i] * iir_coeffs[0];
+        for (i1 j = 1; j < order; j++) {
+            sample += readbuf(bufferkey, (order - 1) * 2, (j - 1) * 2 + 2) * iir_coeffs[j];
+            sample -= readbuf(bufferkey, (order - 1) * 2, (j - 1) * 2 + 1) * iir_coeffs[j + order - 1];
+        }
+        output[i] = sample;
+        writebuf(bufferkey, (order - 1) * 2, input[i]);
+        writebuf(bufferkey, (order - 1) * 2, sample);
+    }
+    return output;
+}
+
+e.g. in-lang implementation of low-period KS
+f1 freq = m2hz(note_num, note_octlets);
+i1 period = int(samplerate / freq);
+if (note_time[0] == 0) {
+    for (i1 i = 0; i < period; i++) {
+        writebuf("ringkey", period, whitenoise1);
+    }
+}
+fm wave = karplus_strong(period, .95, "ringkey");
+fm amp = (note_dead_time == 0) * note_amp;
+output = wave * amp;
+keep_alive = first_nonzero(note_dead_time > release);
+//============
+fm karplus_strong(i1 period, f1 decay, key ringkey) {
+    fm output = 0;
+    i1 count = 0;
+    for (int i = 0; i < block_size; i++) {
+        f1 p0 = readbuf(ringkey, period, period - 1);
+        f1 p1 = readbuf(ringkey, period, period);
+        p0 = (p1 + p0) / 2;
+        output[i] = p1;
+        writebuf(ringkey, period, p0 * decay);
+    }
+    return output;
+}
+
+e.g. internal C implementation of readbuf
+typedef struct _buffer_t {
+    size_t size;
+    size_t head;
+    float *buffer;
+} buffer_t;
+
+buffer_t *buffers;
+
+// somewhere in compilation
+buffers = calloc(NUM_UNIQUE_BUFFER_KEYS, sizeof(buffer_t));
+// ...
+
+void resize_buffer(buffer_t *selection, size_t bufsize) {
+    if (selection->size != bufsize) {
+        float *new_buffer = calloc(bufsize, sizeof(float));
+        if (selection->buffer) {
+            float *base_ptr = selection->buffer + selection->head - bufsize;
+            size_t remaining = 0;
+            if (bufsize > selection->head) {
+                remaining = selection->buffer - base_ptr;
+                base_ptr = selection->buffer;
+            }
+            if (remaining > selection->size - selection->head) {
+                // bufsize > selection->size
+                remaining = selection->size - selection->head;
+            }
+            size_t towrite = selection->buffer + selection->head - base_ptr;
+            
+            // Write [0..selection->head) to [bufsize-selection->head..bufsize), bufsize > selection->head
+            // Write [selection->head-bufsize..selection->head) to [0..bufsize), bufsize <= selection->head
+            memcpy(new_buffer + bufsize - to_write, base_ptr, sizeof(float) * to_write);
+            if (remaining) {
+                // Write [selection->size+selection->head-bufsize..selection->size) to [0..bufsize-selection->head), bufsize <= selection->size
+                // Write [selection->head..selection->size) to [bufsize-selection->size, bufsize-selection->head), bufsize > selection->size
+                memcpy(new_buffer + bufsize - to_write - remaining, selection->buffer + selection->size - remaining, sizeof(float) * remaining);
+            }
+            selection->head = 0;
+            free(selection->buffer);
+        }
+        selection->buffer = new_buffer;
+    }
+}
+
+void readbuf_block(float *output, size_t block_size, size_t bufkey, size_t bufsize, size_t delay) {
+    // bufsize >= block_size + delay by definition
+    buffer_t *selection = buffers[bufkey];
+    resize_buffer(selection, bufsize);
+    size_t delayed_head = (delay >= selection->head) ? (selection->size - delay) : selection->head - delay;
+    float *start = selection->buffer + delayed_head - delay;
+    if (delay > delayed_head) {
+        start = selection->buffer + selection->size + delayed_head - delay;
+    }
+    size_t start_offset = start - selection->buffer;
+    float *end = start + block_size;
+    if (end > selection->buffer + selection->size) {
+        end = selection->buffer + block_size - selection->size + start_offset;
+        memcpy(output, start, sizeof(float) * (selection->size - start_offset));
+        memcpy(output + selection->size - start_offset, selection->buffer, sizeof(float) * (end - selection->buffer));
+    } else {
+        memcpy(output, start, sizeof(float) * block_size);
+    }
+}
+
+void writebuf_block(float *input, size_t block_size, size_t bufkey, size_t bufsize) {
+    // bufsize >= block_size by definition
+    buffer_t *selection = buffers[bufkey];
+    resize_buffer(selection, bufsize);
+    float *start = selection->buffer + selection->head;
+    float *end = start + block_size;
+    if (end > selection->buffer + selection->size) {
+        end = selection->buffer + block_size - selection->size + selection->head;
+        memcpy(start, input, sizeof(float) * (selection->size - selection->head));
+        memcpy(selection->buffer, input + selection->size - selection->head, sizeof(float) * (end - selection->buffer));
+    } else {
+        memcpy(start, input, sizeof(float) * block_size);
+    }
+    selection->head += block_size;
+    selection->head %= selection->size;
+}
+
+float readbuf_one(size_t bufkey, size_t bufsize, size_t delay) {
+    buffer_t *selection = buffers[bufkey];
+    resize_buffer(selection, bufsize);
+    if (delay > selection->head) {
+        return selection->buffer[selection->size - delay + selection->head];
+    }
+    return selection->buffer[selection->head - delay];
+}
+
+void writebuf_one(float value, size_t bufkey, size_t bufsize) {
+    buffer_t *selection = buffers[bufkey];
+    resize_buffer(selection, bufsize);
+    selection->buffer[selection->head] = value;
+    selection->head++;
+    selection->head %= selection->size;
+}

@@ -259,7 +259,6 @@ class Measure():
         self = self.copy()
         if self.depth == 0:
             if random.random() <= p:
-                # starting_point = (1 << self.context.k_notes_per_measure) - (1 << random.randint(1, self.context.k_notes_per_measure))
                 starting_point = random.randint(0, (1 << (self.context.k_notes_per_measure - 1)) - 1) << 1
                 self.percussion = self.context.mutate_drums(self.percussion, starting_point)
                 self.decide_notes(starting_point)
@@ -339,8 +338,6 @@ class Measure():
             if play_chords:
                 current_chord = parent_base
                 for note_i, note in enumerate(current_chord):
-                    #msg_target(mido.Message('note_on', note = note + self.context.base_note, channel=0, velocity = 63 >> note_i, time = delta_time))
-                    #self.note_on_midi(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
                     self.note_on_score(note + self.context.base_note, 63 >> note_i, 0, delta_time, msg_target)
                     delta_time = 0
             
@@ -348,14 +345,10 @@ class Measure():
             for i in range(len(self.context.percussion[self.percussion])):
                 if self.shift[i] is not None and play_chords: # Play the new chord
                     for note in current_chord:
-                        #msg_target(mido.Message('note_off', note = note + self.context.base_note, channel=0, time = delta_time))
-                        #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
                         self.note_off_score(note + self.context.base_note, 0, delta_time, msg_target)
                         delta_time = 0
                     current_chord = self.shift[i]
                     for note_i, note in enumerate(current_chord):
-                        #msg_target(mido.Message('note_on', note = note + self.context.base_note, channel=0, velocity = 63 >> note_i, time = delta_time))
-                        #self.note_on_midi(note + self.context.base_note, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
                         self.note_on_score(note + self.context.base_note, 63 >> note_i, 0, delta_time, msg_target)
                         delta_time = 0
                 voices = self.children[i]
@@ -365,14 +358,10 @@ class Measure():
                     note_offset = self.context.base_note + self.context.voices[v].base_note
                     for note, voice in last_notes: # Kill dead notes
                         if note not in chord and v == voice:
-                            #msg_target(mido.Message('note_off', note = note + note_offset, channel = channel, time = delta_time))
-                            #self.note_off_midi(note + note_offset, pitch_bends, free_channels, delta_time, msg_target)
                             self.note_off_score(note + note_offset, channel, delta_time, msg_target)
                             delta_time = 0
                     for note_i, note in enumerate(chord): # Play new notes
                         if (note, v) not in last_notes:
-                            #msg_target(mido.Message('note_on', note = note + note_offset, channel = channel, velocity = 63 >> note_i, time = delta_time))
-                            #self.note_on_midi(note + note_offset, 63 >> note_i, pitch_bends, free_channels, delta_time, msg_target)
                             self.note_on_score(note + note_offset, 63 >> note_i, channel, delta_time, msg_target)
                             delta_time = 0
                         new_notes.append((note, v))
@@ -382,7 +371,6 @@ class Measure():
                 if not play_drums:
                     drum = 0
                 if drum != 0: # Play drums if any
-                    #msg_target(mido.Message('note_on', note = drum, channel = 9, velocity = 63, time = delta_time))
                     self.note_on_score(drum, 63, -1, delta_time, msg_target)
                     delta_time = 0
                     
@@ -391,24 +379,15 @@ class Measure():
                 delta_time = int(delta_time + wait)
                 
                 if drum != 0: # Kill the drum if we played it
-                    #msg_target(mido.Message('note_off', note = drum, channel = 9, time = delta_time))
                     self.note_off_score(drum, -1, delta_time, msg_target)
                     delta_time = 0
             
             if play_chords:
                 for note in current_chord: # Kill remaining chord notes
-                    #msg_target(mido.Message('note_off', note = note + self.context.base_note, channel=0, time = delta_time))
-                    #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
                     self.note_off_score(note + self.context.base_note, 0, delta_time, msg_target)
                     delta_time = 0
             
             for note, voice in last_notes: # Kill remaining melody notes
-                #msg_target(mido.Message(
-                #    'note_off',
-                #    note = note + self.context.base_note + self.context.voices[voice].base_note,
-                #    channel = self.context.voices[voice].channel,
-                #    time = delta_time))
-                #self.note_off_midi(note + self.context.base_note, pitch_bends, free_channels, delta_time, msg_target)
                 self.note_off_score(note + self.context.base_note, self.context.voices[voice].channel, delta_time, msg_target)
                 delta_time = 0
         else: # Recursively play children nodes
