@@ -1,0 +1,8 @@
+id id semicolon
+id id assign literal semicolon
+id id lparen rparen lbrace
+return literal addop id semicolon
+if lparen id rparen id semicolon
+id id assign id semicolon
+rbrace
+$

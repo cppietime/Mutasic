@@ -1,6 +1,6 @@
 '''EBNF parser'''
 
-from dev_util import  parser_parser
+from dev_util import parser_parser, parser_tester
 
 def load_ebnf(src):
     if isinstance(src, str):
@@ -293,35 +293,20 @@ def test():
     src = io.StringIO()
     src.write('''
 program = { expr } ;
-expr = (* An expression *) expr, { "+", expr } | term + ;
-term = term, { "*", term } * | factor ?, { factor };
-factor = "(", expr, ")" | id | ( a, b, c ) ;
-aa = [ in ] ? ;
-ab = [ in ] + ;
-ac = [ in ] * ;
-ba = { in } ? ;
-bb = { in } + ;
-bc = { in } * ;
+expr = (* An expression *) term, { "+", term } ;
+term = factor, { "*", factor } ;
+factor = id | "(", expr, ")" ;
     '''.strip())
     src.seek(0)
-    grammar = load_ebnf(src).augment('program')
-    print(grammar.nonterminals)
-    for rule in grammar.rules:
-        print(rule)
+    grammar = load_ebnf(src)
+    table = grammar.lalr1_table('program')
+    d = table.to_dict()
+    print(table.__str__(indent=1))
+    parser = parser_tester.TableParser(d)
     
-    firsts = grammar.firsts()
-    follows = grammar.follows(firsts)
-    print(firsts)
-    print(follows)
-    initial_state = grammar.initial_state()
-    print(initial_state)
-    initial_state = grammar.closure(initial_state, firsts, follows)
-    print(initial_state)
-    next_state = grammar.collect_next_states(initial_state, firsts, follows)
-    print(next_state)
-    states = grammar.collect_states(firsts, follows)
-    print(states)
-    print(len(states))
+    tokens = [parser_tester.NamedToken(x) for x in 'id "*" "(" id "+" id ")" id id $'.split()]
+    parse = parser.parse(tokens)
+    print(parse)
 
 if __name__ == '__main__':
     test()

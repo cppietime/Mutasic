@@ -1,0 +1,7 @@
+logicop 7
+compop 6
+bitop 5
+shiftop 4
+addop 3
+mulop 2
+unaryop 1
