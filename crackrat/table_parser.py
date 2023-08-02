@@ -5,7 +5,7 @@ import io
 import json
 import sys
 
-from dev_util import ebnf_parser, token
+from . import ebnf_parser, token
 
 class TableParser:
     def __init__(self, jsonobj):

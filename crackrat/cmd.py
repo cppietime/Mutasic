@@ -1,6 +1,6 @@
 import sys
 
-from dev_util import ebnf_parser
+from . import ebnf_parser
 
 def main():
     src = sys.argv[1]

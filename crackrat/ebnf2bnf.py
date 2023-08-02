@@ -1,6 +1,6 @@
 '''Convert EBNF to BNF'''
 
-from dev_util import ebnf_parser, parser_tester, parser_parser
+from . import ebnf_parser, parser_tester, parser_parser
 
 def load_ebnf_lrgram(src):
     ebnf_rules, terminals, nonterminals = ebnf_parser.load_ebnf_raw(src)

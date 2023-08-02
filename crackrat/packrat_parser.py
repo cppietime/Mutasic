@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 import io
-from dev_util import ebnf_parser, token
+from . import ebnf_parser, token
 
 @dataclass
 class PackratAST:
@@ -52,7 +52,7 @@ class PackratParser:
         key = (symbol, pos)
         if key in self.recurse:
             # We have already started to recurse
-            raise Exception(f'Left-recursion found for symbol {symbol}.\nLeft-recursion is not supported, please reofrmat your grammar.')
+            raise Exception(f'Left-recursion found for symbol {symbol}.\nLeft-recursion is not supported, please reformat your grammar.')
         self.recurse.add(key)
         rules = self.rules[symbol]
         result = None
@@ -145,7 +145,7 @@ goal = ( expr, ";" )*, $ ;
 expr = term, { "+", expr } ;
 term = factor, { "*", term } ;
 factor = "(", expr, ")" | funccall | id ;
-funccall = expr, "(", [ expr, { ",", expr } ], ")" ;
+funccall = id, "(", [ expr, { ",", expr } ], ")" ;
 '''.strip())
     src.seek(0)
     rules, terminals, nonterminals = ebnf_parser.load_ebnf_raw(src)
