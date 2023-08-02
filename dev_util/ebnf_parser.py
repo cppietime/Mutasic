@@ -1,8 +1,13 @@
 '''EBNF parser'''
 
-from dev_util import parser_parser, parser_tester
-
-def load_ebnf(src):
+def load_ebnf_raw(src):
+    '''src: a filename or read-able object.
+    Parses the input according to EBNF grammar.
+    Returns a 3-tuple of form (rules, terminals, nonterminals).
+    rules: A list of rules, each a 2-tuple of (left-hand side, right-hand side).
+    terminals: A set of all found symbols for which there is no rule.
+    nonterminals: A set of all found sybmols for which there is a rule.
+    '''
     if isinstance(src, str):
         with open(src, 'r') as file:
             tokens = _load_tokens(file)
@@ -12,80 +17,7 @@ def load_ebnf(src):
     ebnf_rules = []
     for rule in rules_raw:
         ebnf_rules.append(_parse_rule(rule, nonterminals))
-    replacements = {}
-    new_rules = []
-    bnf_rules = []
-    for i, rule in enumerate(ebnf_rules):
-        lhs, rhs = rule
-        rhs = _replace_rhs(rhs, replacements, new_rules)
-        ebnf_rules[i] = (lhs, rhs)
-    nonterminals.update(map(lambda x: x[0], new_rules))
-    for rule in ebnf_rules + new_rules:
-        lhs, rhs = rule
-        if rhs:
-            if (rhs[0] == 'concatenation'):
-                rhs = tuple(_concat(rhs[1]))
-            else:
-                rhs = (rhs[1],)
-        bnf_rules.append((lhs, rhs))
-    terminals = tuple(map(lambda x: parser_parser.TerminalSymbol(*x[::-1]), enumerate(terminals)))
-    nonterminals = tuple(map(lambda x: parser_parser.NonterminalSymbol(*x[::-1]), enumerate(nonterminals)))
-    terminals_d = dict(map(lambda x: (x.name, x), terminals))
-    nonterminals_d = dict(map(lambda x: (x.name, x), nonterminals))
-    rules = tuple(map(lambda x: parser_parser.ProductionRule(nonterminals_d[x[0]],
-        tuple(map(lambda y: terminals_d.get(y, nonterminals_d.get(y, None)), x[1]))), bnf_rules))
-    return parser_parser.Grammar(terminals, nonterminals, rules)
-
-def _concat(rhs):
-    terms = []
-    for term in rhs:
-        if term[0] == 'term':
-            terms.append(term[1])
-        elif term[0] == 'concatenation':
-            terms.extend(_concat(term[1]))
-        else:
-            raise ValueError('Only term and concatenation should make it here')
-    return terms
-
-def _replace_rhs(rhs, replacements, new_rules):
-    key = rhs[0]
-    if key == 'factor':
-        if len(rhs[1]) == 1:
-            return rhs
-        if len(rhs[1]) == 2:
-            modifier = rhs[1][1]
-            inner = (_replace_rhs(rhs[1][0], replacements, new_rules), rhs[1][1])
-            if inner not in replacements:
-                strkey = f'$gnt{len(replacements)}'
-                replacements[inner] = strkey
-                if modifier == '?':
-                    new_rules.append((strkey, ()))
-                    new_rules.append((strkey, inner[0]))
-                elif modifier == '*':
-                    new_rules.append((strkey, ()))
-                    new_rules.append((strkey, ('concatenation', (('term', strkey), inner[0]))))
-                elif modifier == '+':
-                    new_rules.append((strkey, inner[0]))
-                    new_rules.append((strkey, ('concatenation', (('term', strkey), inner[0]))))
-            return ('term', replacements[inner])
-        else:
-            raise NotImplementedError('Minus terms not yet implemented')
-    elif key == 'alternation':
-        if len(rhs[1]) == 1:
-            return _replace_rhs(rhs[1][0], replacements, new_rules)
-        inner = tuple(map(lambda x: _replace_rhs(x, replacements, new_rules), rhs[1]))
-        if inner not in replacements:
-            strkey = f'$gnt{len(replacements)}'
-            replacements[inner] = strkey
-            for repl in inner:
-                new_rules.append((strkey, repl))
-        return ('term', replacements[inner])
-    elif key == 'concatenation':
-        concs = []
-        for conc in rhs[1]:
-            concs.append(_replace_rhs(conc, replacements, new_rules))
-        return ('concatenation', tuple(concs))
-    return rhs
+    return ebnf_rules, terminals, nonterminals
 
 def _parse_rule(raw_rule, nonterminals):
     assert raw_rule[1] == '=' and raw_rule[-1] == ';', 'Malformed rule'
@@ -185,10 +117,10 @@ def _organize_rules(tokens):
             if token[0] not in {',', '|', '=', ';', '[', '{', '?', ']', '}', '(', ')', '+', '*', '-'}:
                 terminals.add(token)
             if len(rule) == 1:
-                assert token == '=', 'Expected assignment'
+                assert token == '=', f'Invalid rule: {" ".join(rule)}: Expected assignment'
         rule.append(token)
         if token == ';':
-            assert len(rule) >= 3, 'Premature semicolon'
+            assert len(rule) >= 3, f'Invalid rule: {" ".join(rule)}:Premature semicolon'
             rules.append(rule)
             rule = []
     terminals.difference_update(nonterminals)
@@ -203,7 +135,7 @@ def _load_tokens(src):
         if not c:
             break
         if state == 'start':
-            if c in {',', '|', '=', ';', '[', '{', '?', ']', '}', '?', '+', '*', '-'}:
+            if c in {',', '|', '=', ';', '[', '{', '?', ']', '}', '?', '+', '*', '-', ')'}:
                 if buffer:
                     tokens.append(''.join(buffer).strip())
                 tokens.append(c)
@@ -298,15 +230,7 @@ term = factor, { "*", factor } ;
 factor = id | "(", expr, ")" ;
     '''.strip())
     src.seek(0)
-    grammar = load_ebnf(src)
-    table = grammar.lalr1_table('program')
-    d = table.to_dict()
-    print(table.__str__(indent=1))
-    parser = parser_tester.TableParser(d)
-    
-    tokens = [parser_tester.NamedToken(x) for x in 'id "*" "(" id "+" id ")" id id $'.split()]
-    parse = parser.parse(tokens)
-    print(parse)
+    print(load_ebnf_raw(src))
 
 if __name__ == '__main__':
     test()

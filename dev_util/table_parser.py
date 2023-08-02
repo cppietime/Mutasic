@@ -5,30 +5,7 @@ import io
 import json
 import sys
 
-from dev_util import ebnf_parser, parser_parser
-
-class Token(ABC):
-    def token_name(self):
-        return NotImplemented
-    
-    def token_id(self):
-        return NotImplemented
-    
-    def contents(self):
-        return NotImplemented
-    
-    def __str__(self):
-        return self.token_name()
-    
-    def __repr__(self):
-        return self.token_name()
-
-class NamedToken(Token):
-    def __init__(self, name):
-        self.name = name
-    
-    def token_name(self):
-        return self.name
+from dev_util import ebnf_parser, token
 
 class TableParser:
     def __init__(self, jsonobj):
@@ -126,7 +103,7 @@ def load_and_test(rules, text):
         d = json.load(file)
     parser = TableParser(d)
     with open(text, 'r') as file:
-        tokens = [NamedToken(x) for x in file.read().split()]
+        tokens = [token.NamedToken(x) for x in file.read().split()]
     print(parser.parse(tokens))
 
 if __name__ == '__main__':
