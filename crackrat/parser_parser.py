@@ -1,4 +1,6 @@
-'''Generate LR parse tables'''
+"""Generate LR parse tables, at least in theory.
+Don't rely on it.
+"""
 
 from dataclasses import dataclass, field
 import json

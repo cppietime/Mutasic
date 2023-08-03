@@ -1,4 +1,4 @@
-'''Test the produced parsers'''
+"""Test the produced parsers"""
 
 from abc import ABC
 import io
@@ -8,6 +8,9 @@ import sys
 from . import ebnf_parser, token
 
 class TableParser:
+    """A shift-reduce parser for LALR(1) grammars.
+    Doesn't work, don't use.
+    """
     def __init__(self, jsonobj):
         self.terminal_names = {}
         self.terminal_ids = {}

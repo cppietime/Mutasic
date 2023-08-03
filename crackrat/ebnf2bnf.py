@@ -1,8 +1,11 @@
-'''Convert EBNF to BNF'''
+"""Convert EBNF to BNF."""
 
 from . import ebnf_parser, parser_tester, parser_parser
 
 def load_ebnf_lrgram(src):
+    """Loads all rules from a specified file in EBNF format and returns
+    the 3-tuple: (terminals, nonterminals, rules).
+    """
     ebnf_rules, terminals, nonterminals = ebnf_parser.load_ebnf_raw(src)
     bnf_rules, new_nonterminals = ebnf2bnf(ebnf_rules)
     nonterminals.update(new_nonterminals)
@@ -15,6 +18,7 @@ def load_ebnf_lrgram(src):
     return parser_parser.Grammar(terminals, nonterminals, rules)
 
 def ebnf2bnf(ebnf_rules):
+    """Converts EBNF rules to BNF by flattening optional pieces."""
     replacements = {}
     new_rules = []
     bnf_rules = []

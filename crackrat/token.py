@@ -1,7 +1,10 @@
+"""Token interface for use with lexers and parser."""
+
 from abc import ABC
 from dataclasses import dataclass
 
 class Token(ABC):
+    """Abstract class to derive for tokens."""
     def token_name(self):
         return NotImplemented
     
@@ -35,12 +38,15 @@ class NamedToken(Token):
 
 @dataclass
 class StaticToken(Token):
+    """Out of the box implementation of a token with all properties known
+    at init time.
+    """
     name: str
-    id_: int
     lexeme: str
     line_no: int = 0
     col_no: int = 0
     file: str = ''
+    id_: int = 0
     
     def token_name(self):
         return self.name

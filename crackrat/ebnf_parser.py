@@ -1,13 +1,14 @@
-'''EBNF parser'''
+"""Parser for files of EBNF rules."""
 
 def load_ebnf_raw(src):
-    '''src: a filename or read-able object.
+    """Load all the rules in a file and return its rules and symbols.
+    src: a filename or read-able object.
     Parses the input according to EBNF grammar.
     Returns a 3-tuple of form (rules, terminals, nonterminals).
     rules: A list of rules, each a 2-tuple of (left-hand side, right-hand side).
     terminals: A set of all found symbols for which there is no rule.
     nonterminals: A set of all found sybmols for which there is a rule.
-    '''
+    """
     if isinstance(src, str):
         with open(src, 'r') as file:
             tokens = _load_tokens(file)

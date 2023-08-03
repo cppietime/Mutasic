@@ -1,4 +1,6 @@
-'''Packrat parser'''
+"""Packrat parser for EBNF specified grammars.
+Does not allow left-recursion.
+"""
 
 from dataclasses import dataclass
 import io
@@ -34,7 +36,7 @@ class PackratAST:
         return s
 
 class PackratParser:
-    '''Parses set of EBNF rules with Packrat parsing'''
+    """Parses set of EBNF rules with Packrat parsing"""
     def __init__(self, rules):
         self.rules = {}
         for rule in rules:
@@ -48,7 +50,7 @@ class PackratParser:
         return self._parse_symbol(goal, tokens, 0)
     
     def _parse_symbol(self, symbol, tokens, pos):
-        '''Results are either None on failure, or (rhs, start, end, subtrees) on success.'''
+        """Results are either None on failure, or (lhs, rhs, start, end, subtrees) on success."""
         key = (symbol, pos)
         if key in self.recurse:
             # We have already started to recurse
@@ -64,7 +66,7 @@ class PackratParser:
         return result
     
     def _parse_rule(self, rule, tokens, pos, lhs):
-        '''Memoizing wrapper for _eval_rule.'''
+        """Memoizing wrapper for _eval_rule."""
         key = (lhs, rule, pos)
         if key in self.memo:
             return self.memo[key]
