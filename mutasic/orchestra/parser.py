@@ -50,7 +50,7 @@ def gen_parser():
         id_ = tok(sb.identifier())
         lbrack = tok(sb.literal('['))
         rbrack = tok(sb.literal(']'))
-        litval = tok(sb.number() | sb.regex(r'["]([^"\\]|\\.)*["]')).map(Constant)
+        litval = tok(sb.alternate(sb.number() | sb.regex(r'["]([^"\\]|\\.)*["]'), sb.literal('false'), sb.literal('true'))).map(Constant)
         unaryop = tok(sb.alternate(*map(sb.literal, ['-', '!', '~'])))
         addop = tok(sb.alternate(*map(sb.literal, ['+', '-'])))
         mulop = tok(sb.alternate(*map(sb.literal, ['*', '/', '%'])))
@@ -70,7 +70,7 @@ def gen_parser():
         lvalue = (sb.alternate(litval, id_.map(Variable), expr.between(lpar, rpar).select(1)) + resolve.some(True)).map(
             lambda result:
                 ( Call(result)
-                    if result[-1][0] == '('
+                    if result[-1][-1][0] == '('
                     else Accessor(result) )
                 if len(result) == 2 else result[0]
         )
@@ -85,17 +85,17 @@ def gen_parser():
         bits = (shift + (bitop + shift).some(True)).map(labo)
         comp = (bits + (compop + bits).some(True)).map(labo)
         rvalue = (comp + (logicop + comp).some(True)).map(labo)
-        expr << ((lvalue + assign).some(True) + rvalue).map(
+        expr <<= ((lvalue + assign).some(True) + rvalue).map(
             lambda result:
                 Assignment(result) if len(result) == 2 else result[0]
-        )
+        ) | rvalue
         type_ = (id_ + (lbrack + rbrack).some()).map(Typespec)
         var = (id_ + (assign + expr).optional())
         vardec = sb.concatenate(type_, (var // comma), semicolon).map(Vardec)
         block = stmt.some(True).between(tok(sb.literal('{')), tok(sb.literal('}')), True).map(BlockStmt)
         stmt << sb.alternate(
-            (expr + semicolon).map(ExprStmt),
-            if_, while_, for_, block, break_, continue_, return_, vardec)
+            if_, while_, for_, break_, continue_, return_, vardec, block,
+            (expr + semicolon).map(ExprStmt))
         params = (type_ + id_) // comma # [[type, id], [type, id], ...]
         funcdef = sb.concatenate(type_, id_, lpar.suppress(), params.optional().wrap(), rpar.suppress(), block).map(Funcdef)
         program = (ignore.suppress() + (funcdef | vardec).some()).extract()
@@ -105,10 +105,17 @@ def test():
     p = gen_parser()
     txt = '''
 i1 var = 80;
-fm main(){
-    i1 result = 20;
-    im r = 40 + 50 * 30 << 1;
-    return result;
+fm main(i1 arg, i1 arg2){
+    b1 bool = false;
+    b1 boo2 = 1;
+    i1 iv = true;
+    i1 result = 70 + 40 * 3 == 5;
+    if (result <= 4) {
+        while (arg2 == arg) {
+            return arg2;
+            break;
+        }
+    }
 }
 b1[] ax = 20 + 4;
 '''
@@ -116,7 +123,7 @@ b1[] ax = 20 + 4;
     print(m)
     print(txt[m.position:])
     ctx = compiler.Context()
-    print('got', ctx.eval_program(m.result))
+    print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))
 
 if __name__ == '__main__':
     test()

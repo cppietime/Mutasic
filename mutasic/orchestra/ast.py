@@ -29,6 +29,10 @@ class Assignable(ABC):
     def assign_to(self, ctx, scope, value):
         return NotImplemented
 
+class AOTable(ABC):
+    def const_value(self):
+        return NotImplemented
+
 class Funcdef(ForwardScannable):
     def __init__(self, r):
         self.return_type = r[0]
@@ -38,7 +42,6 @@ class Funcdef(ForwardScannable):
             self.params = []
         else:
             self.params = r[2][0]
-        print(self.params)
     
     def scan_scope(self, ctx, _):
         partype_names = tuple(map(lambda p: p[0].name, self.params))
@@ -62,7 +65,6 @@ class Vardec(ForwardScannable, Tacable):
         for name, init in self.vars:
             if name in scope:
                 raise SyntaxError(f'Redefinition of variable {name} shadows previously declared variable')
-            print(f'{name=} {init=} {init.is_constant(ctx)=}')
             scope[name] = compiler.Variable(name, self.type_.type(ctx), False, init)
             ctx.vars[name] = scope[name]
     
@@ -74,10 +76,17 @@ class Vardec(ForwardScannable, Tacable):
             if init is None:
                 continue
             tacs += init.eval(ctx, scope)
-            tacs.append(f'pop {self.type_.name} {name};')
+            mytype = self.type_.type(ctx)
+            valtype = init.type(ctx)
+            if mytype != valtype:
+                casttype = ctx.cast_to(valtype, mytype)
+                if casttype is None:
+                    raise TypeError(f'Cannot cast {valtype.name} to {mytype.name}')
+                tacs.append(f'cast {valtype.name} {mytype.name};')
+            tacs.append(f'pop variable {name} {self.type_.name};')
         return tacs
 
-class LeftAssocBinOp(HasValue, Tacable):
+class LeftAssocBinOp(HasValue, Tacable, AOTable):
     def __init__(self, r):
         self.children = [r[0]] + [x[1] for x in r[1]]
         self.ops = [x[0] for x in r[1]]
@@ -88,12 +97,15 @@ class LeftAssocBinOp(HasValue, Tacable):
         return all(map(lambda e: e.is_constant(ctx), self.children))
     
     def type(self, ctx):
+        if self.ops[0] in ('==', '!=', '>=', '<=', '>', '<', '&&', '||'):
+            return ctx.types['b1']
         t = self.children[0].type(ctx)
-        if t is None:
-            print(f'{self.children[0]=}')
         return t
     
     def eval(self, ctx, _):
+        cv = self.const_value()
+        if cv is not None:
+            return [f'push const {cv} {self.type(ctx).name};']
         tacs = self.children[0].eval(ctx, _)
         lasttype = self.children[0].type(ctx)
         for child, op in zip(self.children[1:], self.ops):
@@ -102,13 +114,50 @@ class LeftAssocBinOp(HasValue, Tacable):
             if common_type is None:
                 raise TypeError(f'No way to coerce types {lasttype} with {childtype}')
             if lasttype != common_type:
-                tacs.append(f'cast {lasttype.name} -> {common_type.name};')
+                tacs.append(f'cast {lasttype.name} {common_type.name};')
             tacs += child.eval(ctx, _)
             if childtype != common_type:
-                tacs.append(f'cast {childtype.name} -> {common_type.name};')
+                tacs.append(f'cast {childtype.name} {common_type.name};')
             tacs.append(f'{op} {common_type.name} {common_type.name};')
             lasttype = common_type
+        if lasttype != self.type(ctx):
+            # Should only occur for bool type
+            tacs.append(f'cast {lasttype.name} {self.type(ctx).name}')
         return tacs
+    
+    def const_value(self):
+        lvalue = None
+        for i, child in enumerate(self.children):
+            if not isinstance(child, AOTable):
+                return None
+            value = child.const_value()
+            if value is None:
+                continue
+            if lvalue == None:
+                lvalue = value
+            else:
+                rvalue = value
+                lvalue = {
+                    '+': lvalue + rvalue,
+                    '-': lvalue - rvalue,
+                    '*': lvalue * rvalue,
+                    '/': lvalue / rvalue,
+                    '%': lvalue % rvalue,
+                    '&': lvalue & rvalue,
+                    '|': lvalue | rvalue,
+                    '^': lvalue ^ rvalue,
+                    '<<': int(lvalue << rvalue),
+                    '>>': int(lvalue >> rvalue),
+                    '==': int(lvalue == rvalue),
+                    '!=': int(lvalue != rvalue),
+                    '>=': int(lvalue >= rvalue),
+                    '<=': int(lvalue <= rvalue),
+                    '>': int(lvalue > rvalue),
+                    '<': int(lvalue < rvalue),
+                    '&&': int(bool(lvalue and rvalue)),
+                    '||': int(bool(lvalue or rvalue))
+                }[self.ops[i - 1]]
+        return lvalue
 
 class Accessor(HasValue, Tacable, Assignable):
     def __init__(self, r):
@@ -152,32 +201,46 @@ class Accessor(HasValue, Tacable, Assignable):
         tacs = self.parent.eval(ctx, _)
         if self.type_ == 'ELEMENT':
             tacs += self.selector.eval(ctx, _)
-            tacs.append('index;')
+            if self.selector.type(ctx) != ctx.types['i1']:
+                tacs.append(f'cast {self.selector.type(ctx).name} i1;')
+            tacs.append(f'push index {self.type(ctx).name};')
         else:
-            tacs.append(f'access {self.selector};')
+            tacs.append(f'push field {self.parent.type(ctx).name} {self.selector} {self.type(ctx).name};')
         return tacs
     
     def assign_to(self, ctx, _, value):
         tacs = self.parent.eval(ctx, _)
-        tacs += self.selector.eval(ctx, _)
+        tacs += value.eval(ctx, _)
         mytype = self.type(ctx)
         valtype = value.type(ctx)
         if mytype != valtype:
             casttype = ctx.cast_to(valtype, mytype)
             if casttype is None:
                 raise TypeError(f'Cannot implicitly cast type {valtype.name} to {mytype.name}')
-            tacs.append(f'cast {valtype.name} -> {casttype.name};')
-        tacs += value.eval(ctx, _)
+            tacs.append(f'cast {valtype.name} {casttype.name};')
         if self.type_ == 'ELEMENT':
-            tacs.append('indexed_write;')
+            tacs += self.selector.eval(ctx, _)
+            if self.selector.type(ctx) != ctx.types['i1']:
+                tacs.append(f'cast {self.selector.type(ctx).name} i1;')
+            tacs.append(f'pop index {mytype.name};')
         else:
-            tacs.append(f'field_write {self.selector};')
+            tacs.append(f'pop field {self.parent.type(ctx).name} {self.selector} {mytype.name};')
         return tacs
 
 class Call(HasValue, Tacable):
+    """Before the call opcode, push all arguments to the function being called
+    in order. Then in executing the call opcode, the stack position below
+    all of the arguments will be saved, the calling code pointer will be saved,
+    and execution will jump to the function location.
+    When the called function returns, all of its locals will be popped,
+    all of its arguments are popped, the stack pointer is reset, the return
+    value is pushed, and execution resumes at the calling point.
+    The site of the return instruction will need to be examined to find all of
+    the scoped blocks that need to be cleared.
+    """
     def __init__(self, r):
         base, resolver = r
-        self.args = resolver[-1][1:-1]
+        self.args = [] if len(resolver[-1]) == 2 else resolver[-1][1]
         if len(r) == 2:
             self.function = r[0]
         else:
@@ -192,19 +255,34 @@ class Call(HasValue, Tacable):
     
     def type(self, ctx):
         pt = self.function.type(ctx)
-        if not pt.is_function:
+        if pt is not None:
             raise TypeError('Attempt to call non-function type')
-        return pt.return_type
+        if not isinstance(self.function, Variable):
+            raise NotImplementedError('Function pointers not yet supported')
+        name = self.function.name
+        types = [arg.type(ctx) for arg in self.args]
+        function = ctx.match_function(name, types)
+        if function is None:
+            raise NameError(f'No function found named {name} for {types}')
+        return function.type.return_type
     
     def eval(self, ctx, _):
         if not isinstance(self.function, Variable):
-            raise ValueError('Function calls currently only allowed on direct named functions')
+            raise NotImplementedError('Function pointers not yet supported')
         name = self.function.name
         types = [arg.type(ctx) for arg in self.args]
+        function = ctx.match_function(name, types)
+        if function is None:
+            raise NameError(f'No function found named {name} for {types}')
         tacs = []
-        for arg in self.args:
+        for arg, typ, target in zip(self.args, types, function.type.args_types):
             tacs += arg.eval(ctx, _)
-        tacs.append(f'call {name} {[arg.name for arg in types]};')
+            target_type = ctx.cast_to(typ, target)
+            if target_type is None:
+                raise TypeError(f'Cannot cast {typ.name} to {target.name}')
+            elif target_type != typ:
+                tacs.append(f'cast {typ.name} {target.name};')
+        tacs.append(f'call {name} {self.type(ctx).name} {" ".join([arg.name for arg in types])};')
         return tacs
 
 class Assignment(HasValue, Tacable):
@@ -234,7 +312,7 @@ class Assignment(HasValue, Tacable):
             if op == '=':
                 tacs += target.assign_to(ctx, _, source)
             else:
-                binop = LeftAssocBinOp([target, [op[0], source]])
+                binop = LeftAssocBinOp([target, [[op[0], source]]])
                 tacs += target.assign_to(ctx, _, binop)
         return tacs
 
@@ -243,17 +321,21 @@ class Variable(HasValue, Tacable, Assignable):
         self.name = r
     
     def is_constant(self, ctx):
-        if self.name in ctx.vars:
-            raise KeyError(f'Variable {self.name} not defined')
+        if self.name not in ctx.vars:
+            if not any(map(lambda f: f[0] == self.name, ctx.funcs.keys())):
+                raise KeyError(f'Variable {self.name} not defined')
+            return True
         return ctx.vars[self.name].is_constant
     
     def type(self, ctx):
-        if self.name in ctx.vars:
-            raise KeyError(f'Variable {self.name} not defined')
+        if self.name not in ctx.vars:
+            if not any(map(lambda f: f[0] == self.name, ctx.funcs.keys())):
+                raise KeyError(f'Variable {self.name} not defined')
+            return None
         return ctx.vars[self.name].type
     
     def eval(self, ctx, _):
-        return [f'push variable {self.name};']
+        return [f'push variable {self.name} {self.type(ctx).name};']
     
     def assign_to(self, ctx, _, value):
         tacs = value.eval(ctx, _)
@@ -263,29 +345,58 @@ class Variable(HasValue, Tacable, Assignable):
             casttype = ctx.cast_to(valtype, mytype)
             if casttype is None:
                 raise TypeError(f'Cannot implicitly cast type {valtype.name} to {mytype.name}')
-            tacs.append(f'cast {valtype.name} -> {casttype.name};')
-        tacs.append(f'pop {self.name};')
+            tacs.append(f'cast {valtype.name} {casttype.name};')
+        tacs.append(f'pop variable {self.name} {self.type(ctx).name};')
         return tacs
 
-class Constant(HasValue, Tacable):
+class Constant(HasValue, Tacable, AOTable):
     def __init__(self, r):
         if r.startswith('"'):
             self.type_ = 'string'
             self.value = r
-        else:
+        elif '.' in r:
             self.type_ = 'float'
             self.value = float(r)
+        elif r in ('true', 'false'):
+            self.type_ = 'bool'
+            self.value = r == 'true'
+        else:
+            self.type_ = 'int'
+            self.value = int(r)
     
     def is_constant(self, ctx):
         return True
     
     def type(self, ctx):
-        return ctx.num_type
+        if self.type_ == 'string':
+            return ctx.types['i1']
+        elif self.type_ == 'float':
+            return ctx.types['f1']
+        elif self.type_ == 'int':
+            return ctx.types['i1']
+        elif self.type_ == 'bool':
+            return ctx.types['b1']
+        raise TypeError(f'Unknown constant type {self.type_}')
     
     def eval(self, ctx, _):
-        return [f'push const {self.value};']
+        if self.type_ == 'string':
+            if self.value not in ctx.keys:
+                ctx.keys[self.value] = len(ctx.keys)
+            value = ctx.keys[self.value]
+        elif self.type_ == 'bool':
+            value = int(self.value)
+        else:
+            value = self.value
+        return [f'push const {value} {self.type(ctx).name};']
+    
+    def const_value(self):
+        if self.type_ in ('int', 'float'):
+            return self.value
+        elif self.type_ == 'bool':
+            return int(self.value)
+        return None
 
-class UnaryOp(HasValue, Tacable):
+class UnaryOp(HasValue, Tacable, AOTable):
     def __init__(self, r):
         self.value = r[-1]
         if len(r) == 2:
@@ -302,10 +413,28 @@ class UnaryOp(HasValue, Tacable):
     def eval(self, ctx, _):
         tacs = self.value.eval(ctx, _)
         if self.op is not None:
-            tacs.append(f'{self.op} {self.type(ctx)}')
+            tacs.append(f'unary {self.op} {self.type(ctx)};')
         return tacs
+    
+    def const_value(self):
+        if not isinstance(self.value, AOTable):
+            return None
+        value = self.value.const_value()
+        if value is None:
+            return None
+        if self.op == '-':
+            return -value
+        elif self.op == '~':
+            return ~value
+        elif self.op == '!':
+            return not value
 
 class Return(Tacable):
+    """When a return instruction is reached in post-processing, we must
+    traverse each scope upwards to the root of the function and pop each of
+    their locals. Then, get the calling address, pop all of the arguments,
+    push the return value, if any, and return control to the calling address.
+    """
     def __init__(self, r):
         if len(r) == 1:
             self.value = None
@@ -313,9 +442,9 @@ class Return(Tacable):
     
     def eval(self, ctx, _):
         if self.value is None:
-            return ['return nil;']
+            return ['return void;']
         tacs = self.value.eval(ctx, _)
-        tacs.append('return pop;')
+        tacs.append(f'return {self.value.type(ctx).name};')
         return tacs
 
 class If(Tacable):
@@ -324,6 +453,8 @@ class If(Tacable):
         self.if_true = r[2]
         if len(r) == 4:
             self.if_false = r[3][1]
+        else:
+            self.if_false = None
     
     def eval(self, ctx, _):
         tacs = self.predicate.eval(ctx, _)
@@ -331,8 +462,8 @@ class If(Tacable):
         false_block = []
         if self.if_false is not None:
             false_block = self.if_false.eval(ctx, _)
-            true_block.append(f'jmp back {len(false_block)};')
-        tacs.append(f'if false jmp ahead {len(true_block)};')
+            true_block.append(f'jmp back {len(false_block)} always;')
+        tacs.append(f'jmp ahead {len(true_block)} if false;')
         return tacs + true_block + false_block
 
 class For(Tacable):
@@ -347,11 +478,13 @@ class For(Tacable):
         condition = self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
         after = self.after.eval(ctx, _)
+        tacs.append('label for begin;')
         tacs += condition
-        tacs.append(f'if false jmp ahead {len(body) + len(after) + 1};')
+        tacs.append(f'jmp ahead {len(body) + len(after) + 2} if false;')
         tacs += body
         tacs += after
-        tacs.append(f'jmp back {len(after) + len(body) + 2};')
+        tacs.append(f'jmp back {len(after) + len(body) + 2} always;')
+        tacs.append('label for end;')
         return tacs
 
 class While(Tacable):
@@ -360,21 +493,39 @@ class While(Tacable):
         self.statement = r[2]
     
     def eval(self, ctx, _):
-        tacs = self.predicate.eval(ctx, _)
+        tacs = ['label while begin;']
+        tacs += self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
-        tacs.append(f'if false jmp ahead {len(body) + 1}')
+        tacs.append(f'jmp ahead {len(body) + 2} if false;')
         tacs += body
-        tacs.append('jmp back {len(body) + 1};')
+        tacs.append(f'jmp back {len(body) + 2} always;')
+        tacs.append('label while end;')
         return tacs
 
-# TODO figure out code for break and continue
 class Break:
+    """As break can occur only within for or while loops, when break is
+    encountered in post-processing, we iterate upwards until we find a
+    begin label for a for or while loop, then iterate downward until we find
+    its matching end label.
+    Then, for all scoped blocks that include this statement but not the
+    end label, pop all of their locals off the stack. Finally, jump execution
+    to the position immediately after the end label.
+    """
     def __init__(self, r):
         pass
+    
+    def eval(self, ctx, _):
+        return ['break;']
 
 class Continue:
+    """Behaves the same as Break, but jump to the begin label instead of the
+    end label.
+    """
     def __init__(self, r):
         pass
+    
+    def eval(self, ctx, _):
+        return ['continue;']
 
 class Typespec:
     def __init__(self, r):
@@ -393,7 +544,7 @@ class ExprStmt(Tacable):
     
     def eval(self, ctx, _):
         tacs = self.expr.eval(ctx, _)
-        tacs.append('pop nil;')
+        tacs.append(f'pop void {self.expr.type(ctx).name};')
         return tacs
 
 class BlockStmt:

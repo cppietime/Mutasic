@@ -68,8 +68,11 @@ class Context:
         self._setup_builtin_types()
         self._setup_builtin_vars()
         self._setup_builtin_funcs()
+        
+        self.control_stack = []
     
     def _setup_builtin_types(self):
+        void = self.types['void'] = Type('void', {}, {})
         i1 = self.types['i1'] = Type('i1', {}, {})
         im = self.types['im'] = Type('im', {}, {}, base_type=i1)
         i1_len = Variable('i1[].length', i1, True)
@@ -144,6 +147,29 @@ class Context:
         self.funcs['readbuf', (i1.name, i1.name, i1.name)] = Function('readbuf', 'readbuf', read_t)
         self.funcs['writebuf', (i1.name, i1.name, f1.name)] = Function('writebuf', 'writebuf', write_t)
     
+    def match_function(self, name, types):
+        best = None
+        for key, value in self.funcs.items():
+            if key[0] != name:
+                continue
+            if len(key[1]) != len(types):
+                continue
+            fit = 2
+            for p, t in zip(key[1], types):
+                if self.cast_to(t, self.types[p]) == None:
+                    fit = 0
+                    break
+                elif p != t.name:
+                    fit = min(fit, 1)
+            if fit == 0:
+                continue
+            elif fit == 1:
+                if best is None:
+                    best = value
+            else:
+                return value
+        return best
+    
     def forward_scan_global(self, program):
         for tl in program:
             tl.scan_scope(self, self.vars)
@@ -173,24 +199,65 @@ class Context:
                 self.vars.pop(param)
             func.code = tacs
         print(list(self.funcs.keys()))
-        return self.funcs['main', ()].code
+        return self.funcs['main', ('i1', 'i1')].code
     
     def eval_block(self, block):
         # Keep track of locals
+        self.control_stack.append([])
         block_scope = {}
         tacs = [] # List of 3-address codes
         for stmt in block.statements:
             ntac = stmt.eval(self, block_scope)
             tacs += ntac
         # Pop topmost stack frame
+        local_vars = sorted(block_scope.values(), key=lambda v: (v.type.name, v.name))
+        scope_key = ' '.join(map(lambda v: f'{v.name}={v.type.name}', local_vars))
+        tacs.insert(0, f'enter scope {scope_key};')
+        tacs.append(f'exit_scope {scope_key};')
         for local in block_scope:
             self.vars.pop(local)
+        # TODO replacements for break/continue
+        self.control_stack.pop()
         return tacs
     
     def common_type(self, ta, tb):
-        # TODO
-        return ta
+        if ta == self.types['void'] or tb == self.types['void']:
+            return None
+        if ta == tb:
+            return ta
+        ta_base = ta.name[0]
+        tb_base = tb.name[0]
+        ta_mod = ta.name[1:]
+        tb_mod = tb.name[1:]
+        if ta_base == tb_base:
+            target_base = ta_base
+        else:
+            for base in 'cfib':
+                if ta_base == base or tb_base == base:
+                    target_base = base
+                    break
+            else:
+                return None
+        if ta_mod == tb_mod:
+            target_mod = ta_mod
+        else:
+            if ta_mod == '1' and tb_mod == 'm':
+                target_mod = 'm'
+            elif tb_mod == '1' and ta_mod == 'm':
+                target_mod = 'm'
+            else:
+                return None
+        return self.types[target_base + target_mod]
     
     def cast_to(self, ta, tb):
-        # TODO
-        return ta
+        if ta == self.types['void'] or tb == self.types['void']:
+            return None
+        ta_mod = ta.name[1:]
+        tb_mod = tb.name[1:]
+        if ta_mod == tb_mod:
+            return tb
+        if tb_mod == '[]':
+            return None
+        if tb_mod == '1':
+            return None
+        return tb
