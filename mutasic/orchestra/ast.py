@@ -82,6 +82,7 @@ class Vardec(ForwardScannable, Tacable):
                 casttype = ctx.cast_to(valtype, mytype)
                 if casttype is None:
                     raise TypeError(f'Cannot cast {valtype.name} to {mytype.name}')
+                print(f'CAST {valtype.name} to {mytype.name} = {casttype.name}')
                 tacs.append(f'cast {valtype.name} {mytype.name};')
             tacs.append(f'pop variable {name} {self.type_.name};')
         return tacs
@@ -97,10 +98,15 @@ class LeftAssocBinOp(HasValue, Tacable, AOTable):
         return all(map(lambda e: e.is_constant(ctx), self.children))
     
     def type(self, ctx):
-        if self.ops[0] in ('==', '!=', '>=', '<=', '>', '<', '&&', '||'):
-            return ctx.types['b1']
-        t = self.children[0].type(ctx)
-        return t
+        lasttype = self.children[0].type(ctx)
+        for child, op in zip(self.children[1:], self.ops):
+            childtype = child.type(ctx)
+            binop_types = ctx.binop_types(op, lasttype, childtype)
+            if binop_types is None:
+                raise TypeError(f'Cannot perform op {op} on types {lasttype.name} and {childtype.name}')
+            res_type = binop_types[0]
+            lasttype = res_type
+        return lasttype
     
     def eval(self, ctx, _):
         cv = self.const_value()
@@ -110,18 +116,19 @@ class LeftAssocBinOp(HasValue, Tacable, AOTable):
         lasttype = self.children[0].type(ctx)
         for child, op in zip(self.children[1:], self.ops):
             childtype = child.type(ctx)
-            common_type = ctx.common_type(lasttype, childtype)
-            if common_type is None:
-                raise TypeError(f'No way to coerce types {lasttype} with {childtype}')
-            if lasttype != common_type:
-                tacs.append(f'cast {lasttype.name} {common_type.name};')
+            binop_types = ctx.binop_types(op, lasttype, childtype)
+            if binop_types is None:
+                raise TypeError(f'Cannot perform op {op} on types {lasttype.name} and {childtype.name}')
+            res_type, l_type, r_type = binop_types
+            if lasttype != l_type:
+                tacs.append(f'cast {lasttype.name} {l_type.name};')
             tacs += child.eval(ctx, _)
-            if childtype != common_type:
-                tacs.append(f'cast {childtype.name} {common_type.name};')
-            tacs.append(f'{op} {common_type.name} {common_type.name};')
-            lasttype = common_type
+            if childtype != r_type:
+                tacs.append(f'cast {childtype.name} {r_type.name};')
+            tacs.append(f'{op} {l_type.name} {r_type.name} {res_type.name};')
+            lasttype = res_type
         if lasttype != self.type(ctx):
-            # Should only occur for bool type
+            # Should never actually occur
             tacs.append(f'cast {lasttype.name} {self.type(ctx).name}')
         return tacs
     
@@ -205,6 +212,7 @@ class Accessor(HasValue, Tacable, Assignable):
                 tacs.append(f'cast {self.selector.type(ctx).name} i1;')
             tacs.append(f'push index {self.type(ctx).name};')
         else:
+            # TODO index fields by number
             tacs.append(f'push field {self.parent.type(ctx).name} {self.selector} {self.type(ctx).name};')
         return tacs
     
@@ -224,6 +232,7 @@ class Accessor(HasValue, Tacable, Assignable):
                 tacs.append(f'cast {self.selector.type(ctx).name} i1;')
             tacs.append(f'pop index {mytype.name};')
         else:
+            # TODO index fields by number
             tacs.append(f'pop field {self.parent.type(ctx).name} {self.selector} {mytype.name};')
         return tacs
 
@@ -254,12 +263,14 @@ class Call(HasValue, Tacable):
         return False
     
     def type(self, ctx):
+        name = self.function.name
+        if name in ctx.types:
+            return ctx.types[name]
         pt = self.function.type(ctx)
         if pt is not None:
             raise TypeError('Attempt to call non-function type')
         if not isinstance(self.function, Variable):
             raise NotImplementedError('Function pointers not yet supported')
-        name = self.function.name
         types = [arg.type(ctx) for arg in self.args]
         function = ctx.match_function(name, types)
         if function is None:
@@ -270,11 +281,18 @@ class Call(HasValue, Tacable):
         if not isinstance(self.function, Variable):
             raise NotImplementedError('Function pointers not yet supported')
         name = self.function.name
+        if name in ctx.types:
+            if len(self.args) != 1:
+                raise TypeError('Only one argument should be passed to a typecast')
+            tacs = self.args[0].eval(ctx, _)
+            tacs.append(f'cast {self.args[0].type(ctx).name} {name};')
+            return tacs
         types = [arg.type(ctx) for arg in self.args]
         function = ctx.match_function(name, types)
         if function is None:
             raise NameError(f'No function found named {name} for {types}')
         tacs = []
+        return_type = function.type.return_type
         for arg, typ, target in zip(self.args, types, function.type.args_types):
             tacs += arg.eval(ctx, _)
             target_type = ctx.cast_to(typ, target)
@@ -282,7 +300,11 @@ class Call(HasValue, Tacable):
                 raise TypeError(f'Cannot cast {typ.name} to {target.name}')
             elif target_type != typ:
                 tacs.append(f'cast {typ.name} {target.name};')
-        tacs.append(f'call {name} {self.type(ctx).name} {" ".join([arg.name for arg in types])};')
+        tacs.append(f'call {name} {return_type.name} {" ".join([arg.name for arg in function.type.args_types])};')
+        for typ in function.type.args_types:
+            tacs.append(f'pop void {typ.name};')
+        if return_type != ctx.types['void']:
+            tacs.append(f'push returned {return_type.name};')
         return tacs
 
 class Assignment(HasValue, Tacable):
@@ -299,21 +321,18 @@ class Assignment(HasValue, Tacable):
     def type(self, ctx):
         lhs, rhs = self.targets[0], (self.targets[1] if len(self.targets) > 2 else self.value)
         lt, rt = lhs.type(ctx), rhs.type(ctx)
-        # if self.ops[0] == '=':
-            # return lt
-        # op = self.ops[0][:-1]
-        # return lt.methods[(op, rt)].return_type
         return lt
     
     def eval(self, ctx, _):
         sources = self.targets[1:] + [self.value]
         tacs = []
-        for target, source, op in zip(self.targets, sources, self.ops):
+        for target, source, op in reversed(tuple(zip(self.targets, sources, self.ops))):
             if op == '=':
                 tacs += target.assign_to(ctx, _, source)
             else:
                 binop = LeftAssocBinOp([target, [[op[0], source]]])
                 tacs += target.assign_to(ctx, _, binop)
+        tacs += self.targets[0].eval(ctx, _)
         return tacs
 
 class Variable(HasValue, Tacable, Assignable):
@@ -398,10 +417,15 @@ class Constant(HasValue, Tacable, AOTable):
 
 class UnaryOp(HasValue, Tacable, AOTable):
     def __init__(self, r):
-        self.value = r[-1]
         if len(r) == 2:
-            self.op = r[0]
+            if len(r[0]) == 1:
+                self.value = r[-1]
+                self.op = r[0][0]
+            else:
+                self.value = UnaryOp([r[0][1:], r[1]])
+                self.op = r[0][0]
         else:
+            self.value = r[0]
             self.op = None
     
     def is_constant(self, ctx):
@@ -413,7 +437,7 @@ class UnaryOp(HasValue, Tacable, AOTable):
     def eval(self, ctx, _):
         tacs = self.value.eval(ctx, _)
         if self.op is not None:
-            tacs.append(f'unary {self.op} {self.type(ctx)};')
+            tacs.append(f'unary {self.op} {self.type(ctx).name};')
         return tacs
     
     def const_value(self):
@@ -473,17 +497,17 @@ class For(Tacable):
         self.after_each = r[3]
         self.statement = r[4]
     
-    def eval(ctx, _):
+    def eval(self, ctx, _):
         tacs = self.before.eval(ctx, _)
         condition = self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
-        after = self.after.eval(ctx, _)
+        after = self.after_each.eval(ctx, _)
         tacs.append('label for begin;')
         tacs += condition
         tacs.append(f'jmp ahead {len(body) + len(after) + 2} if false;')
         tacs += body
         tacs += after
-        tacs.append(f'jmp back {len(after) + len(body) + 2} always;')
+        tacs.append(f'jmp back {len(after) + len(body) + len(condition)} always;')
         tacs.append('label for end;')
         return tacs
 
@@ -494,11 +518,12 @@ class While(Tacable):
     
     def eval(self, ctx, _):
         tacs = ['label while begin;']
-        tacs += self.predicate.eval(ctx, _)
+        predicate = self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
+        tacs += predicate
         tacs.append(f'jmp ahead {len(body) + 2} if false;')
         tacs += body
-        tacs.append(f'jmp back {len(body) + 2} always;')
+        tacs.append(f'jmp back {len(body) + len(predicate)} always;')
         tacs.append('label while end;')
         return tacs
 
@@ -529,14 +554,31 @@ class Continue:
 
 class Typespec:
     def __init__(self, r):
-        self.name = r[0]
-        self.array = len(r[1]) if len(r) == 2 else 0
+        if len(r[1]) == 0:
+            self.base = None
+            self.name = r[0]
+            self.array = False
+        else:
+            self.base = Typespec([r[0], r[1][:-1]])
+            self.name = self.base.key()
+            self.array = True
+    
+    def key(self):
+        if not self.array:
+            return self.name
+        return f'{self.base.key()}[]'
     
     def type(self, ctx):
-        key = self.name
-        if self.array:
-            key += '[]'
-        return ctx.types[key]
+        if self.base is None:
+            return ctx.types[self.name]
+        key = self.key()
+        if key in ctx.types:
+            # Array type already exists, just return it
+            return ctx.types[key]
+        # Array type does not exist, create it
+        array_type = compiler.Type(key, {}, {}, base_type = self.base)
+        ctx.types[key] = array_type
+        return array_type
 
 class ExprStmt(Tacable):
     def __init__(self, r):
@@ -544,6 +586,17 @@ class ExprStmt(Tacable):
     
     def eval(self, ctx, _):
         tacs = self.expr.eval(ctx, _)
+        """In some cases this will need to be optimized away.
+        push X t;
+        pop void t;
+        can annihilate each other, and
+        push X void;
+        should never occur, though function calls that return void
+        will push nothing.
+        pop void void;
+        will be added when the expression is void, e.g. void function calls;
+        this can just be omitted always.
+        """
         tacs.append(f'pop void {self.expr.type(ctx).name};')
         return tacs
 

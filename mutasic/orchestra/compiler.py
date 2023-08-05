@@ -48,6 +48,7 @@ class Variable:
     is_constant: bool = False
     initial_val: 'ast.HasValue' = None
     rate: int = 0 # Constant
+    location: tuple[str, int] = None # (reference, offset)
 
 @dataclass
 class Function:
@@ -70,6 +71,7 @@ class Context:
         self._setup_builtin_funcs()
         
         self.control_stack = []
+        self.local_stack_size = 0
     
     def _setup_builtin_types(self):
         void = self.types['void'] = Type('void', {}, {})
@@ -139,7 +141,6 @@ class Context:
         self.funcs['pow', (c1.name, f1.name)] = Function('pow', 'pow', c1f1c)
         self.funcs['urand', ()] = Function('urand', 'urand', f)
         self.funcs['urands', ()] = Function('urands', 'urands', fs)
-        self.funcs['int', (f1.name,)] = Function('int', 'int', f1i)
         self.funcs['ceil', (f1.name,)] = Function('ceil', 'ceil', f1i)
         self.funcs['floor', (f1.name,)] = Function('floor', 'floor', f1i)
         self.funcs['min', (f1.name, f1.name)] = Function('min', 'min', f2f)
@@ -176,7 +177,10 @@ class Context:
     
     def eval_program(self, program):
         self.forward_scan_global(program)
+        i = 0
         for var_name, var in self.vars.items():
+            var.location = ('global', i)
+            i += 1
             if var.initial_val is None:
                 continue
             if not var.initial_val.is_constant(self):
@@ -186,20 +190,153 @@ class Context:
             if func.definition is None:
                 # Can only be true for builtin functions
                 continue
-            function_scope = {}
-            params = func.definition.params
-            for param_t, param_n in params:
-                if param_n in self.vars:
-                    raise NameError(f'Variable {param_n} shadows previously declared variable')
-                param = Variable(param_n, param_t)
-                function_scope[param_n] = param
-            self.vars.update(function_scope)
-            tacs = self.eval_block(func.definition.body)
-            for param in function_scope:
-                self.vars.pop(param)
-            func.code = tacs
+            self.eval_function(func)
         print(list(self.funcs.keys()))
         return self.funcs['main', ('i1', 'i1')].code
+    
+    def eval_function(self, func):
+        function_scope = {}
+        params = func.definition.params
+        i = 0
+        for param_t, param_n in params:
+            if param_n in self.vars:
+                raise NameError(f'Variable {param_n} shadows previously declared variable')
+            param = Variable(param_n, param_t, location = ('PARAM', i))
+            i += 1
+            function_scope[param_n] = param
+        self.vars.update(function_scope)
+        tacs = self.eval_block(func.definition.body)
+        tacs.append('return void;')
+        stack = []
+        stack_size = 0
+        locations = {}
+        last_loop_labels = [] # 2-tuples of (final address, stack size on entry)
+        break_indices = [] # 2-tuples of (final address, current position)
+        remove_indices = []
+        equivalent_location = 0
+        old_locations = [-1] * len(tacs) # Replace old locations in jmps with new ones
+        old_jmps = []
+        # Repoint relative moves
+        for i, tac in enumerate(tacs):
+            if tac.startswith('enter scope'):
+                stack.append(stack_size)
+                stack_vars = tac[:-1].split()[2:]
+                types = []
+                for j, stack_var in enumerate(stack_vars):
+                    name, type_ = stack_var.split('=')
+                    locations[name] = stack_size + j
+                    types.append(type_)
+                stack_size += len(stack_vars)
+                if stack_vars:
+                    tacs[i] = f'advance stack {len(stack_vars)} {" ".join(types)};'
+                else:
+                    remove_indices.append(i)
+                    equivalent_location -= 1
+            elif tac.startswith('exit scope'):
+                stack_vars = tac[:-1].split()[2:]
+                types = []
+                for stack_var in stack_vars:
+                    name, type_ = stack_var.split('=')
+                    locations.pop(name)
+                    types.append(type_)
+                old_stack_size = stack.pop()
+                stack_diff = stack_size - old_stack_size
+                if stack_diff:
+                    tacs[i] = f'regress stack {stack_diff} {" ".join(types)};'
+                else:
+                    remove_indices.append(i)
+                    equivalent_location -= 1
+                stack_size = old_stack_size
+            elif tac.startswith('push variable') or tac.startswith('pop variable'):
+                action, _, varname, typename = tac[:-1].split()
+                if varname in function_scope:
+                    # Function parameter
+                    location = function_scope[varname].location[1]
+                    tacs[i] = f'{action} variable param {location} {typename};'
+                elif varname in locations:
+                    # Stack local variable
+                    location = locations[varname]
+                    tacs[i] = f'{action} variable stack {location} {typename};'
+                elif varname in self.vars:
+                    location = self.vars[varname].location
+                    if location[0] != 'global':
+                        raise Exception(f'{varname} was not in a valid scope')
+                    # Global var
+                    tacs[i] = f'{action} variable global {location[1]} {typename};'
+                else:
+                    raise Exception(f'{varname} was not found in any scope')
+            elif tac == 'label for begin;' or tac == 'label while begin;':
+                break_indices.append([])
+                last_loop_labels.append((equivalent_location, stack_size))
+                equivalent_location -= 1
+                remove_indices.append(i)
+            elif tac == 'continue;':
+                initial_location, old_stack_size = last_loop_labels[-1]
+                stack_diff = stack_size - old_stack_size;
+                if stack_diff:
+                    equivalent_location += 1;
+                    tac = f'regress stack {stack_diff};:'
+                else:
+                    tac = ''
+                offset = equivalent_location - initial_location
+                tacs[i] = f'{tac}jmp back {offset} always;'
+            elif tac == 'break;':
+                break_indices[-1].append((i, equivalent_location))
+            elif tac == 'label for end;' or tac == 'label while end;':
+                breaks = break_indices.pop()
+                for current, final in breaks:
+                    offset = equivalent_location - final
+                    tacs[current] = f'jmp ahead {offset} always;'
+                equivalent_location -= 1
+                remove_indices.append(i)
+                last_loop_labels.pop()
+            elif tac.startswith('jmp'):
+                old_jmps.append(i)
+            elif tac.startswith('return'):
+                new_instrs = 0
+                tac = ''
+                typename = tac[7:-1]
+                if typename != 'void':
+                    tac += f'pop return {typename};:'
+                    new_instrs += 1
+                if stack_size:
+                    tac += f'regress stack {stack_size};:'
+                    new_instrs += 1
+                tac += 'return;'
+                equivalent_location += new_instrs
+            elif tac.startswith('pop void'):
+                if i > 0 and tacs[i - 1].startswith('push'):
+                    remove_indices += [i - 1, i]
+                    equivalent_location -= 2
+            old_locations[i] = equivalent_location
+            equivalent_location += 1
+        # Repoint jumps to recalculated positions
+        for i in old_jmps:
+            old_tac = tacs[i]
+            if old_tac.startswith('jmp ahead'):
+                tail = old_tac[10:]
+                old_offset = int(tail[:tail.find(' ')])
+                old_i = i + old_offset
+                new_i = old_locations[old_i]
+                new_offset = new_i - old_locations[i] + 1
+            else:
+                tail = old_tac[9:]
+                old_offset = int(tail[:tail.find(' ')])
+                old_i = i - old_offset
+                new_i = old_locations[old_i]
+                new_offset = old_locations[i] - new_i + 1
+            tacs[i] = tacs[i].replace(str(old_offset), str(new_offset))
+        # Remove no longer used opcodes
+        new_tacs = []
+        for i, tac in enumerate(tacs):
+            if i in remove_indices:
+                continue
+            new_tacs += tac.split(':')
+        # for i in reversed(remove_indices):
+            # tacs.pop(i)
+        for param in function_scope:
+            self.vars.pop(param)
+        func.code = new_tacs
     
     def eval_block(self, block):
         # Keep track of locals
@@ -211,53 +348,108 @@ class Context:
             tacs += ntac
         # Pop topmost stack frame
         local_vars = sorted(block_scope.values(), key=lambda v: (v.type.name, v.name))
+        for i, var in enumerate(local_vars):
+            var.location = ('local', i)
         scope_key = ' '.join(map(lambda v: f'{v.name}={v.type.name}', local_vars))
-        tacs.insert(0, f'enter scope {scope_key};')
-        tacs.append(f'exit_scope {scope_key};')
+        if scope_key:
+            scope_key = ' ' + scope_key
+        tacs.insert(0, f'enter scope{scope_key};')
+        tacs.append(f'exit scope{scope_key};')
         for local in block_scope:
             self.vars.pop(local)
         # TODO replacements for break/continue
         self.control_stack.pop()
         return tacs
     
-    def common_type(self, ta, tb):
-        if ta == self.types['void'] or tb == self.types['void']:
-            return None
-        if ta == tb:
-            return ta
-        ta_base = ta.name[0]
-        tb_base = tb.name[0]
-        ta_mod = ta.name[1:]
-        tb_mod = tb.name[1:]
-        if ta_base == tb_base:
-            target_base = ta_base
-        else:
-            for base in 'cfib':
-                if ta_base == base or tb_base == base:
-                    target_base = base
-                    break
-            else:
-                return None
-        if ta_mod == tb_mod:
-            target_mod = ta_mod
-        else:
-            if ta_mod == '1' and tb_mod == 'm':
-                target_mod = 'm'
-            elif tb_mod == '1' and ta_mod == 'm':
-                target_mod = 'm'
-            else:
-                return None
-        return self.types[target_base + target_mod]
-    
     def cast_to(self, ta, tb):
+        """If ta can be cast to tb, return tb. Otherwise, return None.
+        """
         if ta == self.types['void'] or tb == self.types['void']:
             return None
         ta_mod = ta.name[1:]
         tb_mod = tb.name[1:]
         if ta_mod == tb_mod:
+            # All elementary types can be cast if needed.
             return tb
-        if tb_mod == '[]':
+        elif tb_mod == '1[]':
+            if ta_mod == '1':
+                # Single values can be cast to an array to fill it.
+                return tb
             return None
-        if tb_mod == '1':
+        elif tb_mod == 'm':
+            if ta_mod == '1':
+                # Single values can be cast to fill a message block.
+                return tb
             return None
-        return tb
+        return None
+    
+    def _common_base(self, base1, base2):
+        if base1 == base2:
+            return base1
+        for base in 'cfib':
+            if base == base1 or base == base2:
+                return base
+        return None
+    
+    def _get_or_make_type(self, base, mod):
+        if mod in '1m':
+            return self.types[base + mod]
+        # Arrays
+        key = base + mod
+        if key in self.types:
+            return self.types[key]
+        previous = key[:-2]
+        base_type = self._get_or_make_type(base, previous)
+        length = Variable(f'{key}.length', self.types['i1'], True)
+        new_type = Type(key, {}, {'length': length}, base_type=base_type)
+        self.types[key] = new_type
+        return new_type
+    
+    def binop_types(self, op, tl, tr):
+        """If tl op tr is a valid operation, return a 3-tuple of:
+        (return type, left target cast type, right target cast type).
+        Otherwise, return None.
+        """
+        tln, trn = tl.name, tr.name
+        left_base, left_mod = tln[:1], tln[1:]
+        right_base, right_mod = trn[:1], trn[1:]
+        if op in ('==', '!=', '<=', '>=', '<', '>'):
+            # Can compare any types of same dimension
+            if left_mod != right_mod:
+                return None
+            base = self._common_base(left_base, right_base)
+            common_type = self._get_or_make_type(base, left_mod)
+            bool_type = self._get_or_make_type('b', left_mod)
+            return (bool_type, common_type, common_type)
+        elif op in ('||', '&&'):
+            # Operands must be cast to bool before opearting in this case
+            if left_mod != right_mod:
+                return None
+            bool_type = self._get_or_make_type('b', left_mod)
+            return (bool_type, bool_type, bool_type)
+        else:
+            # All other binary ops should act the same
+            if (left_mod, right_mod) == ('1', '1[]'):
+                # Broadcast scalar to an array
+                return (tr, self.types[trn[:2]], tr)
+            elif (left_mod, right_mod) == ('1[]', '1'):
+                # Broadcast scalar to an array
+                return (tl, tl, self.types[tln[:2]])
+            elif (left_mod, right_mod) == ('1', 'm'):
+                # Broadcast scalar to a block
+                return (tr, self.types[trn[1] + '1'], tr)
+            elif (left_mod, right_mod) == ('m', '1'):
+                # Broadcast scalar to a block
+                return (tl, tl, self.types[tln[1] + '1'])
+            elif '[]' in left_mod or '[]' in right_mod:
+                # Do not support binary operations on arrays otherwise
+                return None
+            elif left_mod == right_mod:
+                if op in ('|', '&', '^', '<<', '>>'):
+                    # These ops must take and return integers
+                    common_base = 'i'
+                else:
+                    common_base = self._common_base(left_base, right_base)
+                common_type = self._get_or_make_type(common_base, left_mod)
+                return (common_type, common_type, common_type)
+            return None

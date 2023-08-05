@@ -89,6 +89,10 @@ def gen_parser():
             lambda result:
                 Assignment(result) if len(result) == 2 else result[0]
         ) | rvalue
+        """Need the above alternation because there can be a conflict between
+        assign and compop where "value ==" will match one (lvalue + assign)
+        and then fail the following rvalue.
+        """
         type_ = (id_ + (lbrack + rbrack).some()).map(Typespec)
         var = (id_ + (assign + expr).optional())
         vardec = sb.concatenate(type_, (var // comma), semicolon).map(Vardec)
@@ -104,20 +108,19 @@ def gen_parser():
 def test():
     p = gen_parser()
     txt = '''
-i1 var = 80;
 fm main(i1 arg, i1 arg2){
-    b1 bool = false;
-    b1 boo2 = 1;
-    i1 iv = true;
-    i1 result = 70 + 40 * 3 == 5;
-    if (result <= 4) {
-        while (arg2 == arg) {
-            return arg2;
-            break;
+    i1 i;
+    for (b1 condition = false; !condition; condition += 1;) {
+        i1 j = 0;
+        j = i1(2.5);
+        break;
+        while (i > 30 * 2) {
+            i -= j;
+            j = sin(j);
         }
+        continue;
     }
 }
-b1[] ax = 20 + 4;
 '''
     m = p(txt)
     print(m)
