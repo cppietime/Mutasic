@@ -371,6 +371,7 @@ class Context:
                 equivalent_location += new_instrs
             elif tac.startswith('pop void'):
                 if i > 0 and tacs[i - 1].startswith('push'):
+                    # TODO track skippable statements
                     if not tacs[i - 1].startswith('push index') and not tacs[i - 1].startswith('push field'):
                         remove_indices += [i - 1, i]
                         equivalent_location -= 2

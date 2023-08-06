@@ -565,8 +565,8 @@ class If(Tacable):
         false_block = []
         if self.if_false is not None:
             false_block = self.if_false.eval(ctx, _)
-            true_block.append(f'jmp back {len(false_block)} always;')
-        tacs.append(f'jmp ahead {len(true_block)} if false;')
+            true_block.append(f'jmp ahead {len(false_block) + 1} always;')
+        tacs.append(f'jmp ahead {len(true_block) + 1} if false;')
         return tacs + true_block + false_block
 
 class For(Tacable):
