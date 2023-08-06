@@ -110,15 +110,18 @@ def test():
     txt = '''
 void main(){
     output = 0.5;
-    output = sin(output);
-    for (i1 i = 0; i < 4; i += 1;) {
-        output[i] = 4;
+    for (i1 i = 1; i < 11; i += 1;) {
+        output[i] = i;
+        if (i == 4) {
+            output[20] = -10;
+            continue;
+        }
+        if (i == 9) {
+            break;
+        }
+        output[block_size - 1 - i] = i;
     }
-    i = 20;
-    while (i < 25) {
-        output[i] = 5;
-        i += 1;
-    }
+    output[0] = 60;
 }
 '''
     m = p(txt)

@@ -683,7 +683,10 @@ class ExprStmt(Tacable):
 
 class BlockStmt:
     def __init__(self, r):
-        self.statements = r[0]
+        if r:
+            self.statements = r[0]
+        else:
+            self.statements = []
     
     def eval(self, ctx, _):
         return ctx.eval_block(self)
