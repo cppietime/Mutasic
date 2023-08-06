@@ -148,28 +148,29 @@ class Context:
         self.types['c1(c1,f1)'] = c1f1c = Type('c1(c1,f1)', {}, {}, True, return_type=c1, args_types=(c1, f1))
         self.types['f1(i1,i1,i1)'] = read_t = Type('f1(i1,i1,i1)', {}, {}, True, return_type=f1, args_types=(i1, i1, i1))
         self.types['v(i1,i1,f1)'] = write_t = Type('v(i1,i1,f1)', {}, {}, True, return_type=None, args_types=(i1, i1, f1))
-        self.funcs['sqrt', (f1.name,)] = Function('sqrt', 'sqrt', f1f)
-        self.funcs['sin', (f1.name,)] = Function('sin', 'sin', f1f)
-        self.funcs['asin', (f1.name,)] = Function('asin', 'asin', f1f)
+        self.funcs['sqrt', (f1.name,)] = Function('sqrt', 'sqrt', f1f) # Native
+        self.funcs['sin', (f1.name,)] = Function('sin', 'sin', f1f) # Native
+        self.funcs['asin', (f1.name,)] = Function('asin', 'asin', f1f) # Native
         self.funcs['cos', (f1.name,)] = Function('cos', 'cos', f1f)
         self.funcs['acos', (f1.name,)] = Function('acos', 'acos', f1f)
+        self.funcs['atan2', (f1.name, f1.name)] = Function('atan2', 'atan2', f2f) # Native
         self.funcs['abs', (f1.name,)] = Function('abs', 'abs', f1f)
         self.funcs['abs', (c1.name,)] = Function('abs', 'abs', c1f)
         self.funcs['arg', (c1.name,)] = Function('arg', 'arg', c1f)
-        self.funcs['log', (f1.name,)] = Function('log', 'log', f1f)
+        self.funcs['log', (f1.name,)] = Function('log', 'log', f1f) # Native
         self.funcs['log', (f1.name,)] = Function('log', 'log', c1c)
-        self.funcs['exp', (f1.name,)] = Function('exp', 'exp', f1f)
+        self.funcs['exp', (f1.name,)] = Function('exp', 'exp', f1f) # Native
         self.funcs['exp', (c1.name,)] = Function('exp', 'exp', c1c)
-        self.funcs['pow', (f1.name, f1.name)] = Function('pow', 'pow', f2f)
+        self.funcs['pow', (f1.name, f1.name)] = Function('pow', 'pow', f2f) # Native
         self.funcs['pow', (c1.name, f1.name)] = Function('pow', 'pow', c1f1c)
-        self.funcs['urand', ()] = Function('urand', 'urand', f)
+        self.funcs['urand', ()] = Function('urand', 'urand', f) # Native
         self.funcs['urands', ()] = Function('urands', 'urands', fs)
         self.funcs['ceil', (f1.name,)] = Function('ceil', 'ceil', f1i)
         self.funcs['floor', (f1.name,)] = Function('floor', 'floor', f1i)
         self.funcs['min', (f1.name, f1.name)] = Function('min', 'min', f2f)
         self.funcs['max', (f1.name, f1.name)] = Function('max', 'max', f2f)
-        self.funcs['readbuf', (i1.name, i1.name, i1.name)] = Function('readbuf', 'readbuf', read_t)
-        self.funcs['writebuf', (i1.name, i1.name, f1.name)] = Function('writebuf', 'writebuf', write_t)
+        self.funcs['readbuf', (i1.name, i1.name, i1.name)] = Function('readbuf', 'readbuf', read_t) # Native
+        self.funcs['writebuf', (i1.name, i1.name, f1.name)] = Function('writebuf', 'writebuf', write_t) # Native
     
     def match_function(self, name, types):
         best = None
@@ -251,6 +252,7 @@ class Context:
         old_locations = [-1] * len(tacs) # Replace old locations in jmps with new ones
         old_jmps = []
         # Repoint relative moves
+        print('\n\nOLDTACS' + '\n'.join(tacs))
         for i, tac in enumerate(tacs):
             if tac.startswith('enter scope'):
                 # stack.append(stack_size)

@@ -109,31 +109,14 @@ def test():
     p = gen_parser()
     txt = '''
 void main(){
-    i1 i = 4;
     output = 0.5;
-    output = cos(output);
-    output[8.5] = cos(output)[0.5];
-}
-
-fm sin(fm phase) {
-    fm s = phase + 0; /* Copy value */
-    for (i1 j = 0; j < block_size; j += 1;) {
-        s[j] = sin(s[j]);
+    output = sin(output);
+    for (i1 i = 0; i < 4; i += 1;) {
+        i = i;
     }
-    return s;
-}
-
-f1 cos(f1 phase) {
-    phase = pi / 2 - phase;
-    return sin(phase);
-}
-
-fm cos(fm phase) {
-    fm c = phase + 0;
-    for (i1 j = 0; j < block_size; j += 1;) {
-        c[j] = cos(c[j]);
+    while (i) {
+        i = 0;
     }
-    return c;
 }
 '''
     m = p(txt)
@@ -142,8 +125,6 @@ fm cos(fm phase) {
     print(txt[m.position:])
     ctx = compiler.Context()
     print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))
-    print('\n\SIN\n' + '\n'.join(ctx.funcs[('sin', ('fm',))].code))
-    print('\n\nCOS\n' + '\n'.join(ctx.funcs[('cos', ('f1',))].code))
     
     vm = pyvm.VM()
     vm.pre_init = ctx.pre_init

@@ -103,6 +103,13 @@ class VM:
             operand = self.stack.pop()
             casted = self.cast_to(operand, from_, to)
             self.stack.append(casted)
+        elif words[0] == 'dup':
+            self.stack.append(self.stack[-1])
+        elif words[0] == 'swap':
+            index = int(words[1])
+            tmp = self.stack[-1]
+            self.stack[-1] = self.stack[-1 - index]
+            self.stack[-1 - index] = tmp
         # TODO opcodes
         else:
             raise NameError(f'Unknown opcode {opcode}')
@@ -132,7 +139,7 @@ class VM:
             index = int(self.stack.pop())
             parent = self.stack.pop()
             if not hasattr(parent, '__getitem__'):
-                raise TypeError(f'Attempt to index unindexable type {type(parent)}')
+                raise TypeError(f'Attempt to index unindexable type {type(parent)}.')
             value = parent[index]
         elif words[1] == 'field':
             typ = words[2]
@@ -148,6 +155,9 @@ class VM:
                     value = parent.imag
             else:
                 raise TypeError("Custom classes don't even exist yet")
+        elif words[1] == 'head':
+            index = int(words[2])
+            value = self.stack[-index]
         elif words[1] == 'returned':
             value = self.retval
             if value is None:
@@ -173,17 +183,21 @@ class VM:
             else:
                 raise NameError(f'Unknown variable specifier {words[2]}')
         elif words[1] == 'index':
+            print('RUNNING POP!!!!')
             index = int(popped)
             value = self.stack.pop()
             parent = self.stack.pop()
             if not hasattr(parent, '__getitem__'):
-                raise TypeError(f'Attempt to index unindexable type {type(parent)}')
+                raise TypeError(f'Attempt to index unindexable type {type(parent)}.\nGot {popped=}, {value=}, {parent=},\nremainder: {self.stack=}')
             parent[index] = value
         elif words[1] == 'field':
             raise TypeError('Classes not yet implemented, how did this happen?')
         elif words[1] == 'void':
             # Do nothing
             pass
+        elif words[1] == 'head':
+            index = int(words[2])
+            self.stack[-index] = popped
         else:
             raise NameError(f'Unknown push specifier {words[1]}')
     
