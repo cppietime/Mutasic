@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import math
+import numbers
 
 from . import ast
 
@@ -40,6 +42,10 @@ class Type:
     base_type: 'Type' = None
     return_type: 'Type' = None
     args_types: list['Type'] = None
+    
+    def __post_init__(self):
+        self.indexed_members = list(self.fields.keys()) + list(self.methods.keys())
+        self.member_indices = dict(map(lambda x: reversed(x), enumerate(self.indexed_members)))
 
 @dataclass
 class Variable:
@@ -62,6 +68,7 @@ class Context:
     def __init__(self):
         self.vars: Scope = {}
         self.funcs: dict[FunctionSig, Function] = {}
+        self.pre_init = [] # To-be-generated opcodes to setup globals
         self.types: dict[str, Type] = {}
         self.num_type: Type = None
         self.keys: dict[str, int] = {}
@@ -69,9 +76,6 @@ class Context:
         self._setup_builtin_types()
         self._setup_builtin_vars()
         self._setup_builtin_funcs()
-        
-        self.control_stack = []
-        self.local_stack_size = 0
     
     def _setup_builtin_types(self):
         void = self.types['void'] = Type('void', {}, {})
@@ -98,10 +102,23 @@ class Context:
         
         self.num_type = f1
     
+    def _euler_gamma(self):
+        harm = 0
+        for i in range(1, 1000):
+            harm += 1/i
+        return harm - math.log(1, 1000)
+    
     def _setup_builtin_vars(self):
-        self.vars['block_size'] = Variable('block_size', self.types['i1'], True) # constant
-        self.vars['sample_rate'] = Variable('sample_rate', self.types['i1'], True) # constant
-        self.vars['n_channels'] = Variable('n_channels', self.types['i1'], True) # constant
+        self.vars['pi'] = Variable('pi', self.types['f1'], True, math.pi)
+        self.vars['tau'] = Variable('tau', self.types['f1'], True, math.pi * 2)
+        self.vars['e'] = Variable('e', self.types['f1'], True, math.e)
+        self.vars['gamma'] = Variable('gamma', self.types['f1'], True, self._euler_gamma())
+        self.vars['phi'] = Variable('phi', self.types['f1'], True, (1 + 5**.5)/2)
+        self.vars['rt2'] = Variable('rt2', self.types['f1'], True, 2**.5)
+        self.vars['rthalf'] = Variable('rthalf', self.types['f1'], True, .5**.5)
+        self.vars['block_size'] = Variable('block_size', self.types['i1'], True, 64)
+        self.vars['sample_rate'] = Variable('sample_rate', self.types['i1'], True, 44100)
+        self.vars['n_channels'] = Variable('n_channels', self.types['i1'], True, 1)
         self.vars['glob_time'] = Variable('glob_time', self.types['im'], True, rate=2)
         self.vars['active_notes'] = Variable('active_notes', self.types['i1'], True, rate=2)
         self.vars['note_num'] = Variable('note_num', self.types['i1'], True, rate=1)
@@ -126,15 +143,21 @@ class Context:
         self.types['f1(f1)'] = f1f = Type('f1(f1)', {}, {}, True, return_type=f1, args_types=(f1,))
         self.types['i1(f1)'] = f1i = Type('i1(f1)', {}, {}, True, return_type=i1, args_types=(f1,))
         self.types['c1(c1)'] = c1c = Type('c1(c1)', {}, {}, True, return_type=c1, args_types=(c1,))
+        self.types['f1(c1)'] = c1f = Type('f1(c1)', {}, {}, True, return_type=c1, args_types=(c1,))
         self.types['f1(f1,f1)'] = f2f = Type('f1(f1,f1)', {}, {}, True, return_type=f1, args_types=(f1, f1))
         self.types['c1(c1,f1)'] = c1f1c = Type('c1(c1,f1)', {}, {}, True, return_type=c1, args_types=(c1, f1))
         self.types['f1(i1,i1,i1)'] = read_t = Type('f1(i1,i1,i1)', {}, {}, True, return_type=f1, args_types=(i1, i1, i1))
         self.types['v(i1,i1,f1)'] = write_t = Type('v(i1,i1,f1)', {}, {}, True, return_type=None, args_types=(i1, i1, f1))
+        self.funcs['sqrt', (f1.name,)] = Function('sqrt', 'sqrt', f1f)
         self.funcs['sin', (f1.name,)] = Function('sin', 'sin', f1f)
+        self.funcs['asin', (f1.name,)] = Function('asin', 'asin', f1f)
         self.funcs['cos', (f1.name,)] = Function('cos', 'cos', f1f)
+        self.funcs['acos', (f1.name,)] = Function('acos', 'acos', f1f)
         self.funcs['abs', (f1.name,)] = Function('abs', 'abs', f1f)
-        self.funcs['abs', (c1.name,)] = Function('abs', 'abs', c1c)
+        self.funcs['abs', (c1.name,)] = Function('abs', 'abs', c1f)
+        self.funcs['arg', (c1.name,)] = Function('arg', 'arg', c1f)
         self.funcs['log', (f1.name,)] = Function('log', 'log', f1f)
+        self.funcs['log', (f1.name,)] = Function('log', 'log', c1c)
         self.funcs['exp', (f1.name,)] = Function('exp', 'exp', f1f)
         self.funcs['exp', (c1.name,)] = Function('exp', 'exp', c1c)
         self.funcs['pow', (f1.name, f1.name)] = Function('pow', 'pow', f2f)
@@ -183,6 +206,10 @@ class Context:
             i += 1
             if var.initial_val is None:
                 continue
+            if isinstance(var.initial_val, numbers.Number):
+                self.pre_init.append(f'push const {var.initial_val} {var.type.name};')
+                self.pre_init.append(f'pop variable global {var.location[1]} {var.type.name};')
+                continue
             if not var.initial_val.is_constant(self):
                 raise Exception(f'Global variable {var_name} has non-constant initializer.')
             # TODO generate instructions to initialize global variables.
@@ -192,7 +219,7 @@ class Context:
                 continue
             self.eval_function(func)
         print(list(self.funcs.keys()))
-        return self.funcs['main', ('i1', 'i1')].code
+        return self.funcs['main', ()].code
     
     def eval_function(self, func):
         function_scope = {}
@@ -212,6 +239,7 @@ class Context:
         locations = {}
         last_loop_labels = [] # 2-tuples of (final address, stack size on entry)
         break_indices = [] # 2-tuples of (final address, current position)
+        cont_indices = []
         remove_indices = []
         equivalent_location = 0
         old_locations = [-1] * len(tacs) # Replace old locations in jmps with new ones
@@ -219,13 +247,14 @@ class Context:
         # Repoint relative moves
         for i, tac in enumerate(tacs):
             if tac.startswith('enter scope'):
-                stack.append(stack_size)
+                # stack.append(stack_size)
                 stack_vars = tac[:-1].split()[2:]
                 types = []
                 for j, stack_var in enumerate(stack_vars):
                     name, type_ = stack_var.split('=')
                     locations[name] = stack_size + j
                     types.append(type_)
+                stack.append(types)
                 stack_size += len(stack_vars)
                 if stack_vars:
                     tacs[i] = f'advance stack {len(stack_vars)} {" ".join(types)};'
@@ -239,10 +268,13 @@ class Context:
                     name, type_ = stack_var.split('=')
                     locations.pop(name)
                     types.append(type_)
-                old_stack_size = stack.pop()
-                stack_diff = stack_size - old_stack_size
+                old_stack_types = stack.pop()
+                if types != old_stack_types:
+                    raise Exception(f'Types became corrupted between {types} and {old_stack_types}')
+                old_stack_size = len(old_stack_types)
+                stack_diff = old_stack_size
                 if stack_diff:
-                    tacs[i] = f'regress stack {stack_diff} {" ".join(types)};'
+                    tacs[i] = f'regress stack {stack_diff} {" ".join(reversed(types))};'
                 else:
                     remove_indices.append(i)
                     equivalent_location -= 1
@@ -265,28 +297,53 @@ class Context:
                     tacs[i] = f'{action} variable global {location[1]} {typename};'
                 else:
                     raise Exception(f'{varname} was not found in any scope')
-            elif tac == 'label for begin;' or tac == 'label while begin;':
+            elif tac.startswith('label for begin') or tac == 'label while begin;':
                 break_indices.append([])
-                last_loop_labels.append((equivalent_location, stack_size))
+                cont_indices.append([])
+                last_loop_labels.append((equivalent_location, len(stack), tac[:-1].split()[1:], i))
                 equivalent_location -= 1
                 remove_indices.append(i)
             elif tac == 'continue;':
-                initial_location, old_stack_size = last_loop_labels[-1]
-                stack_diff = stack_size - old_stack_size;
+                initial_location, old_stack_size, loop, start_i = last_loop_labels[-1]
+                stack_types = []
+                for j in range(len(stack) - old_stack_size):
+                    stack_types += reversed(stack[-1 - j])
+                stack_diff = len(stack_types)
                 if stack_diff:
                     equivalent_location += 1;
-                    tac = f'regress stack {stack_diff};:'
+                    tac = f'regress stack {stack_diff} {" ".join(stack_types)};:'
                 else:
                     tac = ''
-                offset = equivalent_location - initial_location
-                tacs[i] = f'{tac}jmp back {offset} always;'
+                if loop[0] == 'while':
+                    offset = equivalent_location - initial_location
+                    tacs[i] = f'{tac}jmp back {offset} always;'
+                else:
+                    # For loop...
+                    contloc = int(loop[-1]) + start_i
+                    cont_indices[-1].append((i, equivalent_location, contloc))
+                    tacs[i] = tac
             elif tac == 'break;':
+                initial_location, old_stack_size, loop, _ = last_loop_labels[-1]
+                stack_types = []
+                for j in range(len(stack) - old_stack_size):
+                    stack_types += reversed(stack[-1 - j])
+                stack_diff = len(stack_types)
+                if stack_diff:
+                    equivalent_location += 1;
+                    tac = f'regress stack {stack_diff} {" ".join(stack_types)};:'
+                else:
+                    tac = ''
+                tacs[i] = tac
                 break_indices[-1].append((i, equivalent_location))
             elif tac == 'label for end;' or tac == 'label while end;':
                 breaks = break_indices.pop()
+                conts = cont_indices.pop()
                 for current, final in breaks:
                     offset = equivalent_location - final
-                    tacs[current] = f'jmp ahead {offset} always;'
+                    tacs[current] += f'jmp ahead {offset} always;'
+                for current, final, ci in conts:
+                    offset = old_locations[ci] - final
+                    tacs[current] += f'jmp ahead {offset} always;'
                 equivalent_location -= 1
                 remove_indices.append(i)
                 last_loop_labels.pop()
@@ -300,7 +357,7 @@ class Context:
                     tac += f'pop return {typename};:'
                     new_instrs += 1
                 if stack_size:
-                    tac += f'regress stack {stack_size};:'
+                    tac += f'regress stack {stack_size} {" ".join(types)};:'
                     new_instrs += 1
                 tac += 'return;'
                 equivalent_location += new_instrs
@@ -326,21 +383,18 @@ class Context:
                 new_i = old_locations[old_i]
                 new_offset = old_locations[i] - new_i + 1
             tacs[i] = tacs[i].replace(str(old_offset), str(new_offset))
-        # Remove no longer used opcodes
+        # Remove no longer used opcodes and expand them
         new_tacs = []
         for i, tac in enumerate(tacs):
             if i in remove_indices:
                 continue
             new_tacs += tac.split(':')
-        # for i in reversed(remove_indices):
-            # tacs.pop(i)
         for param in function_scope:
             self.vars.pop(param)
         func.code = new_tacs
     
     def eval_block(self, block):
         # Keep track of locals
-        self.control_stack.append([])
         block_scope = {}
         tacs = [] # List of 3-address codes
         for stmt in block.statements:
@@ -357,8 +411,6 @@ class Context:
         tacs.append(f'exit scope{scope_key};')
         for local in block_scope:
             self.vars.pop(local)
-        # TODO replacements for break/continue
-        self.control_stack.pop()
         return tacs
     
     def cast_to(self, ta, tb):

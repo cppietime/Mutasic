@@ -50,7 +50,7 @@ def gen_parser():
         id_ = tok(sb.identifier())
         lbrack = tok(sb.literal('['))
         rbrack = tok(sb.literal(']'))
-        litval = tok(sb.alternate(sb.number() | sb.regex(r'["]([^"\\]|\\.)*["]'), sb.literal('false'), sb.literal('true'))).map(Constant)
+        litval = tok(sb.alternate((sb.number() + sb.literal('j')).map(lambda result: result[0] + result[1]), sb.number(), sb.regex(r'["]([^"\\]|\\.)*["]'), sb.literal('false'), sb.literal('true'))).map(Constant)
         unaryop = tok(sb.alternate(*map(sb.literal, ['-', '!', '~'])))
         addop = tok(sb.alternate(*map(sb.literal, ['+', '-'])))
         mulop = tok(sb.alternate(*map(sb.literal, ['*', '/', '%'])))
@@ -108,22 +108,29 @@ def gen_parser():
 def test():
     p = gen_parser()
     txt = '''
-fm main(i1 arg, i1 arg2){
-    i1 i;
+void main(){
+    i1 i = 1;
     for (b1 condition = false; !condition; condition += 1;) {
-        i1 j = 0;
-        j = i1(2.5);
+        i1 j = 20;
         break;
-        while (i > 30 * 2) {
-            i -= j;
-            j = sin(j);
-        }
+        j = 8;
         continue;
+        j = 9;
+        {
+            i1 k = 1;
+            break;
+            k = 2;
+            continue;
+            k = 3;
+        }
+        j = 4;
     }
+    i = 2;
 }
 '''
     m = p(txt)
     print(m)
+    print(f'{m.position} vs {len(txt)}')
     print(txt[m.position:])
     ctx = compiler.Context()
     print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))

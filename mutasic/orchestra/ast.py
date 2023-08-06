@@ -82,7 +82,6 @@ class Vardec(ForwardScannable, Tacable):
                 casttype = ctx.cast_to(valtype, mytype)
                 if casttype is None:
                     raise TypeError(f'Cannot cast {valtype.name} to {mytype.name}')
-                print(f'CAST {valtype.name} to {mytype.name} = {casttype.name}')
                 tacs.append(f'cast {valtype.name} {mytype.name};')
             tacs.append(f'pop variable {name} {self.type_.name};')
         return tacs
@@ -139,31 +138,31 @@ class LeftAssocBinOp(HasValue, Tacable, AOTable):
                 return None
             value = child.const_value()
             if value is None:
-                continue
+                return None
             if lvalue == None:
                 lvalue = value
             else:
                 rvalue = value
                 lvalue = {
-                    '+': lvalue + rvalue,
-                    '-': lvalue - rvalue,
-                    '*': lvalue * rvalue,
-                    '/': lvalue / rvalue,
-                    '%': lvalue % rvalue,
-                    '&': lvalue & rvalue,
-                    '|': lvalue | rvalue,
-                    '^': lvalue ^ rvalue,
-                    '<<': int(lvalue << rvalue),
-                    '>>': int(lvalue >> rvalue),
-                    '==': int(lvalue == rvalue),
-                    '!=': int(lvalue != rvalue),
-                    '>=': int(lvalue >= rvalue),
-                    '<=': int(lvalue <= rvalue),
-                    '>': int(lvalue > rvalue),
-                    '<': int(lvalue < rvalue),
-                    '&&': int(bool(lvalue and rvalue)),
-                    '||': int(bool(lvalue or rvalue))
-                }[self.ops[i - 1]]
+                    '+':  lambda lvalue, rvalue: lvalue + rvalue,
+                    '-':  lambda lvalue, rvalue: lvalue - rvalue,
+                    '*':  lambda lvalue, rvalue: lvalue * rvalue,
+                    '/':  lambda lvalue, rvalue: lvalue / rvalue,
+                    '%':  lambda lvalue, rvalue: lvalue % rvalue,
+                    '&':  lambda lvalue, rvalue: lvalue & rvalue,
+                    '|':  lambda lvalue, rvalue: lvalue | rvalue,
+                    '^':  lambda lvalue, rvalue: lvalue ^ rvalue,
+                    '<<': lambda lvalue, rvalue: int(lvalue << rvalue),
+                    '>>': lambda lvalue, rvalue: int(lvalue >> rvalue),
+                    '==': lambda lvalue, rvalue: int(lvalue == rvalue),
+                    '!=': lambda lvalue, rvalue: int(lvalue != rvalue),
+                    '>=': lambda lvalue, rvalue: int(lvalue >= rvalue),
+                    '<=': lambda lvalue, rvalue: int(lvalue <= rvalue),
+                    '>':  lambda lvalue, rvalue: int(lvalue > rvalue),
+                    '<':  lambda lvalue, rvalue: int(lvalue < rvalue),
+                    '&&': lambda lvalue, rvalue: int(bool(lvalue and rvalue)),
+                    '||': lambda lvalue, rvalue: int(bool(lvalue or rvalue))
+                }[self.ops[i - 1]](lvalue, rvalue)
         return lvalue
 
 class Accessor(HasValue, Tacable, Assignable):
@@ -212,8 +211,9 @@ class Accessor(HasValue, Tacable, Assignable):
                 tacs.append(f'cast {self.selector.type(ctx).name} i1;')
             tacs.append(f'push index {self.type(ctx).name};')
         else:
-            # TODO index fields by number
-            tacs.append(f'push field {self.parent.type(ctx).name} {self.selector} {self.type(ctx).name};')
+            ptype = self.parent.type(ctx)
+            index = ptype.member_indices[self.selector]
+            tacs.append(f'push field {ptype.name} {index} {self.type(ctx).name};')
         return tacs
     
     def assign_to(self, ctx, _, value):
@@ -232,8 +232,9 @@ class Accessor(HasValue, Tacable, Assignable):
                 tacs.append(f'cast {self.selector.type(ctx).name} i1;')
             tacs.append(f'pop index {mytype.name};')
         else:
-            # TODO index fields by number
-            tacs.append(f'pop field {self.parent.type(ctx).name} {self.selector} {mytype.name};')
+            ptype = self.parent.type(ctx)
+            index = ptype.member_indices[self.selector]
+            tacs.append(f'pop field {ptype.name} {index} {mytype.name};')
         return tacs
 
 class Call(HasValue, Tacable):
@@ -300,7 +301,7 @@ class Call(HasValue, Tacable):
                 raise TypeError(f'Cannot cast {typ.name} to {target.name}')
             elif target_type != typ:
                 tacs.append(f'cast {typ.name} {target.name};')
-        tacs.append(f'call {name} {return_type.name} {" ".join([arg.name for arg in function.type.args_types])};')
+        tacs.append(f'call fixed {name} {return_type.name} {" ".join([arg.name for arg in function.type.args_types])};')
         for typ in function.type.args_types:
             tacs.append(f'pop void {typ.name};')
         if return_type != ctx.types['void']:
@@ -357,6 +358,8 @@ class Variable(HasValue, Tacable, Assignable):
         return [f'push variable {self.name} {self.type(ctx).name};']
     
     def assign_to(self, ctx, _, value):
+        if self.is_constant(ctx):
+            raise TypeError(f'Cannot assign to constant variable {self.name}')
         tacs = value.eval(ctx, _)
         mytype = self.type(ctx)
         valtype = value.type(ctx)
@@ -373,6 +376,9 @@ class Constant(HasValue, Tacable, AOTable):
         if r.startswith('"'):
             self.type_ = 'string'
             self.value = r
+        elif r.endswith('j'):
+            self.type_ = 'complex'
+            self.value = complex(r)
         elif '.' in r:
             self.type_ = 'float'
             self.value = float(r)
@@ -395,6 +401,8 @@ class Constant(HasValue, Tacable, AOTable):
             return ctx.types['i1']
         elif self.type_ == 'bool':
             return ctx.types['b1']
+        elif self.type_ == 'complex':
+            return ctx.types['c1']
         raise TypeError(f'Unknown constant type {self.type_}')
     
     def eval(self, ctx, _):
@@ -409,7 +417,7 @@ class Constant(HasValue, Tacable, AOTable):
         return [f'push const {value} {self.type(ctx).name};']
     
     def const_value(self):
-        if self.type_ in ('int', 'float'):
+        if self.type_ in ('int', 'float', 'complex'):
             return self.value
         elif self.type_ == 'bool':
             return int(self.value)
@@ -502,7 +510,7 @@ class For(Tacable):
         condition = self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
         after = self.after_each.eval(ctx, _)
-        tacs.append('label for begin;')
+        tacs.append(f'label for begin {len(condition) + len(body) + 2};')
         tacs += condition
         tacs.append(f'jmp ahead {len(body) + len(after) + 2} if false;')
         tacs += body
