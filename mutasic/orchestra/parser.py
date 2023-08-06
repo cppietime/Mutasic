@@ -112,13 +112,8 @@ void main(){
     output = 0.5;
     for (i1 i = 1; i < 11; i += 1;) {
         output[i] = i;
-        if (i == 4) {
-            output[20] = -10;
-            continue;
-        }
-        if (i == 9) {
-            break;
-        }
+        continue;
+        break;
         output[block_size - 1 - i] = i;
     }
     output[0] = 60;

@@ -312,7 +312,7 @@ class Context:
                 equivalent_location -= 1
                 remove_indices.append(i)
             elif tac == 'continue;':
-                initial_location, old_stack_size, loop, start_i = last_loop_labels[-1]
+                jmp_back_to, old_stack_size, loop, start_i = last_loop_labels[-1]
                 stack_types = []
                 for j in range(len(stack) - old_stack_size):
                     stack_types += reversed(stack[-1 - j])
@@ -323,15 +323,15 @@ class Context:
                 else:
                     tac = ''
                 if loop[0] == 'while':
-                    offset = equivalent_location - initial_location
+                    offset = equivalent_location - jmp_back_to
                     tacs[i] = f'{tac}jmp back {offset} always;'
                 else:
                     # For loop...
                     contloc = int(loop[-1]) + start_i
-                    cont_indices[-1].append((i, equivalent_location, contloc))
+                    cont_indices[-1].append((i, old_locations[i], contloc))
                     tacs[i] = tac
             elif tac == 'break;':
-                initial_location, old_stack_size, loop, _ = last_loop_labels[-1]
+                jmp_back_to, old_stack_size, loop, _ = last_loop_labels[-1]
                 stack_types = []
                 for j in range(len(stack) - old_stack_size):
                     stack_types += reversed(stack[-1 - j])
@@ -371,8 +371,9 @@ class Context:
                 equivalent_location += new_instrs
             elif tac.startswith('pop void'):
                 if i > 0 and tacs[i - 1].startswith('push'):
-                    remove_indices += [i - 1, i]
-                    equivalent_location -= 2
+                    if not tacs[i - 1].startswith('push index') and not tacs[i - 1].startswith('push field'):
+                        remove_indices += [i - 1, i]
+                        equivalent_location -= 2
             old_locations[i + 1] = equivalent_location
             equivalent_location += 1
         print(f'\n{old_locations}\n')
