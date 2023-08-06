@@ -109,24 +109,31 @@ def test():
     p = gen_parser()
     txt = '''
 void main(){
-    i1 i = 1;
-    output = (4 + 2j).imag;
-    for (b1 condition = false; !condition; condition += 1;) {
-        i1 j = 20;
-        break;
-        j = 8;
-        continue;
-        j = 9;
-        {
-            i1 k = 1;
-            break;
-            k = 2;
-            continue;
-            k = 3;
-        }
-        j = 4;
+    i1 i = 4;
+    output = 0.5;
+    output = cos(output);
+    output[8.5] = cos(output)[0.5];
+}
+
+fm sin(fm phase) {
+    fm s = phase + 0; /* Copy value */
+    for (i1 j = 0; j < block_size; j += 1;) {
+        s[j] = sin(s[j]);
     }
-    i = 2;
+    return s;
+}
+
+f1 cos(f1 phase) {
+    phase = pi / 2 - phase;
+    return sin(phase);
+}
+
+fm cos(fm phase) {
+    fm c = phase + 0;
+    for (i1 j = 0; j < block_size; j += 1;) {
+        c[j] = cos(c[j]);
+    }
+    return c;
 }
 '''
     m = p(txt)
@@ -135,10 +142,12 @@ void main(){
     print(txt[m.position:])
     ctx = compiler.Context()
     print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))
+    print('\n\SIN\n' + '\n'.join(ctx.funcs[('sin', ('fm',))].code))
+    print('\n\nCOS\n' + '\n'.join(ctx.funcs[('cos', ('f1',))].code))
     
     vm = pyvm.VM()
     vm.pre_init = ctx.pre_init
-    vm.functions = {key: value.code for key, value in ctx.funcs.items()}
+    vm.functions.update({f'{key[0]}({",".join(key[1])})': value.code for key, value in ctx.funcs.items() if value.code is not None})
     vm.global_vars = [0] * len(ctx.vars)
     vm.run()
     print(vm.global_vars[ctx.vars['output'].location[1]])

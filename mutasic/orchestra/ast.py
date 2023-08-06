@@ -47,7 +47,7 @@ class Funcdef(ForwardScannable):
         partype_names = tuple(map(lambda p: p[0].name, self.params))
         sig = self.return_type.name + '(' + ','.join(partype_names) + ')'
         if sig not in ctx.types:
-            functype = ctx.types[sig] = compiler.Type(sig, {}, {}, True, return_type=self.return_type, args_types=tuple(map(lambda p: ctx.types[p], partype_names)))
+            functype = ctx.types[sig] = compiler.Type(sig, {}, {}, True, return_type=self.return_type.type(ctx), args_types=tuple(map(lambda p: ctx.types[p], partype_names)))
         else:
             functype = ctx.types[sig]
         ctx.funcs[(self.name, partype_names)] = compiler.Function(self.name, self.name, functype, self)
@@ -176,7 +176,7 @@ class Accessor(HasValue, Tacable, Assignable):
             self.selector = resolver[-1][1]
         else:
             raise ValueError(f'Invalid accessor argument: {resolver[-1]}')
-        if len(r) == 2:
+        if len(resolver) == 1:
             self.parent = r[0]
         else:
             child = resolver[-2]
@@ -276,7 +276,8 @@ class Call(HasValue, Tacable):
         function = ctx.match_function(name, types)
         if function is None:
             raise NameError(f'No function found named {name} for {types}')
-        return function.type.return_type
+        rt = function.type.return_type
+        return rt
     
     def eval(self, ctx, _):
         if not isinstance(self.function, Variable):
@@ -291,7 +292,7 @@ class Call(HasValue, Tacable):
         types = [arg.type(ctx) for arg in self.args]
         function = ctx.match_function(name, types)
         if function is None:
-            raise NameError(f'No function found named {name} for {types}')
+            raise NameError(f'No function found named {name} for {", ".join([t.name for t in types])}')
         tacs = []
         return_type = function.type.return_type
         for arg, typ, target in zip(self.args, types, function.type.args_types):
@@ -355,7 +356,10 @@ class Variable(HasValue, Tacable, Assignable):
         return ctx.vars[self.name].type
     
     def eval(self, ctx, _):
-        return [f'push variable {self.name} {self.type(ctx).name};']
+        try:
+            return [f'push variable {self.name} {self.type(ctx).name};']
+        except Exception as e:
+            raise Exception(f'Errof for {self.name} {self.type(ctx)}:\n{e}')
     
     def assign_to(self, ctx, _, value):
         if self.is_constant(ctx):

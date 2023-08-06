@@ -14,14 +14,16 @@ class VM:
         self.functions = {}
         self.retval = None
         
-        self.builtin_funcs = {}
+        self.builtin_funcs = {
+            'sin(f1)': self.sin1,
+        }
         
         self.block_size = 64
     
     def run(self):
         self.run_function(self.pre_init)
         
-        main_name = ('main', ())
+        main_name = 'main()'
         if main_name not in self.functions:
             raise ValueError(f'No main function in {list(self.functions.keys())}')
         
@@ -30,38 +32,38 @@ class VM:
     def run_function(self, function):
         pc = 0
         returned = False
+        old_base = self.stack_base
         self.stack_base = len(self.stack)
-        print('\n\n' + '\n'.join(function))
         while not returned:
-            print(f'{pc=} of {len(function)}')
             opcode = function[pc]
             try:
                 pc, returned = self.simulate(opcode, pc)
             except Exception as e:
                 raise Exception(f'Error at {pc=} for {opcode=}:\n{e}')
         self.stack = self.stack[:self.stack_base]
+        self.stack_base = old_base
     
     def simulate(self, opcode, pc):
         stripped_sc = opcode.strip()[:-1].strip()
         words = stripped_sc.split()
         if words[0] == 'noop':
-            return pc + 1, False
+            pass
+        elif words[0] == 'call':
+            self.call(words)
         elif words[0] == 'return':
+            if words[1] != 'void':
+                self.retval = self.stack.pop()
             return pc, True
         elif words[0] == 'push':
             self.push(words)
-            return pc + 1, False
         elif words[0] == 'pop':
             self.pop(words)
-            return pc + 1, False
         elif words[0] == 'jmp':
             return self.jmp(words, pc), False
         elif words[0] == 'advance':
             self.advance(int(words[2]), words[3:])
-            return pc + 1, False
         elif words[0] == 'regress':
             self.regress(int(words[2]))
-            return pc + 1, False
         elif words[0] == 'unary':
             op = words[1]
             if op == '!':
@@ -72,15 +74,39 @@ class VM:
                 self.unary_minus(words[2])
             else:
                 raise ValueError(f'Unknown unary operator {op}')
-            return pc + 1, False
+        elif words[0] == 'binary':
+            op = words[1]
+            funcs = {
+                '+':  self.add,
+                '-':  self.sub,
+                '*':  self.mul,
+                '/':  self.div,
+                '%':  self.mod,
+                '&':  self.binand,
+                '|':  self.binor,
+                '^':  self.binxor,
+                '==': self.eq,
+                '!=': self.neq,
+                '>=': self.gte,
+                '<=': self.lte,
+                '>':  self.gt,
+                '<':  self.lt,
+                '<<': self.lshift,
+                '>>': self.rshift,
+                '&&': self.logand,
+                '||': self.logor,
+            }
+            func = funcs[op]
+            func(words[2], words[3])
         elif words[0] == 'cast':
             from_, to = words[1:]
             operand = self.stack.pop()
             casted = self.cast_to(operand, from_, to)
             self.stack.append(casted)
-            return pc + 1, False
         # TODO opcodes
-        raise NameError(f'Unknown opcode {opcode}')
+        else:
+            raise NameError(f'Unknown opcode {opcode}')
+        return pc + 1, False
     
     def push(self, words):
         if words[1] == 'variable':
@@ -147,11 +173,12 @@ class VM:
             else:
                 raise NameError(f'Unknown variable specifier {words[2]}')
         elif words[1] == 'index':
-            index = int(self.stack.pop())
+            index = int(popped)
+            value = self.stack.pop()
             parent = self.stack.pop()
             if not hasattr(parent, '__getitem__'):
                 raise TypeError(f'Attempt to index unindexable type {type(parent)}')
-            parent[index] = popped
+            parent[index] = value
         elif words[1] == 'field':
             raise TypeError('Classes not yet implemented, how did this happen?')
         elif words[1] == 'void':
@@ -179,14 +206,14 @@ class VM:
         funcname = words[2]
         rettype = words[3]
         argtypes = words[4:]
-        full_funcname = f'funcname({",".join(argtypes)})'
+        full_funcname = f'{funcname}({",".join(argtypes)})'
         if full_funcname in self.builtin_funcs:
             self.builtin_funcs[full_funcname]()
             return
         if full_funcname not in self.functions:
             raise NameError(f'Function {full_funcname} not defined')
         function = self.functions[full_funcname]
-        self.run_function(self, function)
+        self.run_function(function)
     
     def advance(self, amt, types):
         for typ in types:
@@ -552,6 +579,7 @@ class VM:
             raise TypeError(f'Cannot compare types {tl} and {tr}')
         self.stack.append(result)
     
+    def gt(self, tl, tr):
         right = self.stack.pop()
         left = self.stack.pop()
         lmod, rmod = tl[1:], tr[1:]
@@ -619,3 +647,7 @@ class VM:
         else:
             value = ~operand
         self.stack.append(value)
+    
+    def sin1(self):
+        phase = self.stack[-1]
+        self.retval = math.sin(phase)

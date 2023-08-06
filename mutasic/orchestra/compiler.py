@@ -197,6 +197,10 @@ class Context:
     def forward_scan_global(self, program):
         for tl in program:
             tl.scan_scope(self, self.vars)
+        
+        # DEBUGGING
+        # for name, func in self.funcs.items():
+            # print(f'\n{name}:\n{func}')
     
     def eval_program(self, program):
         self.forward_scan_global(program)
@@ -220,7 +224,7 @@ class Context:
                 # Can only be true for builtin functions
                 continue
             self.eval_function(func)
-        print(list(self.funcs.keys()))
+        # print(list(self.funcs.keys()))
         return self.funcs['main', ()].code
     
     def eval_function(self, func):
@@ -494,7 +498,7 @@ class Context:
                 return (tr, self.types[trn[1] + '1'], tr)
             elif (left_mod, right_mod) == ('m', '1'):
                 # Broadcast scalar to a block
-                return (tl, tl, self.types[tln[1] + '1'])
+                return (tl, tl, self.types[tln[0] + '1'])
             elif '[]' in left_mod or '[]' in right_mod:
                 # Do not support binary operations on arrays otherwise
                 return None
