@@ -212,7 +212,9 @@ class Context:
                 continue
             if not var.initial_val.is_constant(self):
                 raise Exception(f'Global variable {var_name} has non-constant initializer.')
-            # TODO generate instructions to initialize global variables.
+            self.pre_init += var.initial_val.eval(self, self.vars)
+            self.pre_init.append(f'pop variable global {var.location[1]} {var.type.name};')
+        self.pre_init.append('return void;')
         for func_name, func in self.funcs.items():
             if func.definition is None:
                 # Can only be true for builtin functions
@@ -505,3 +507,14 @@ class Context:
                 common_type = self._get_or_make_type(common_base, left_mod)
                 return (common_type, common_type, common_type)
             return None
+    
+    def unop_types(self, op, t):
+        if op == '-':
+            return (t, t)
+        elif op == '~':
+            # Must be integers
+            itype = self._get_or_make_type('i', t.name[1:])
+            return (itype, itype)
+        elif op == '!':
+            return (self._get_or_make_type('b', t.name[1:]), t)
+        raise NameError(f'Unknown unary operator {op}')

@@ -3,7 +3,7 @@
 import spyceballs as sb
 
 from .ast import *
-from . import compiler
+from . import compiler, pyvm
 
 """Use the grammar:
 PROGRAM = { FUNCDEF | VARDEC };
@@ -110,6 +110,7 @@ def test():
     txt = '''
 void main(){
     i1 i = 1;
+    output = (4 + 2j).imag;
     for (b1 condition = false; !condition; condition += 1;) {
         i1 j = 20;
         break;
@@ -134,6 +135,13 @@ void main(){
     print(txt[m.position:])
     ctx = compiler.Context()
     print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))
+    
+    vm = pyvm.VM()
+    vm.pre_init = ctx.pre_init
+    vm.functions = {key: value.code for key, value in ctx.funcs.items()}
+    vm.global_vars = [0] * len(ctx.vars)
+    vm.run()
+    print(vm.global_vars[ctx.vars['output'].location[1]])
 
 if __name__ == '__main__':
     test()

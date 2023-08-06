@@ -124,7 +124,7 @@ class LeftAssocBinOp(HasValue, Tacable, AOTable):
             tacs += child.eval(ctx, _)
             if childtype != r_type:
                 tacs.append(f'cast {childtype.name} {r_type.name};')
-            tacs.append(f'{op} {l_type.name} {r_type.name} {res_type.name};')
+            tacs.append(f'binary {op} {l_type.name} {r_type.name} {res_type.name};')
             lasttype = res_type
         if lasttype != self.type(ctx):
             # Should never actually occur
@@ -440,11 +440,17 @@ class UnaryOp(HasValue, Tacable, AOTable):
         return self.value.is_constant(ctx)
     
     def type(self, ctx):
-        return self.value.type(ctx)
+        if self.op is None:
+            return self.value.type(ctx)
+        return ctx.unop_types(self.op, self.value.type(ctx))[0]
     
     def eval(self, ctx, _):
         tacs = self.value.eval(ctx, _)
         if self.op is not None:
+            val_t = self.value.type(ctx)
+            res_t, arg_t = ctx.unop_types(self.op, val_t)
+            if val_t != arg_t:
+                tacs.append(f'cast {val_t.name} {arg_t.name};')
             tacs.append(f'unary {self.op} {self.type(ctx).name};')
         return tacs
     
