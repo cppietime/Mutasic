@@ -316,7 +316,7 @@ class Call(HasValue, Tacable):
                         # stack = [arg, target, index]
                         'push head 1 i1;',
                         # stack = [arg, target, index, index]
-                        'push const 1 i1;',
+                        'push variable block_size i1;',
                         # stack = [arg, target, index, index, block_size]
                         'binary < i1 i1 b1;',
                         # stack = [arg, target, index, condition]
@@ -581,12 +581,13 @@ class For(Tacable):
         condition = self.predicate.eval(ctx, _)
         body = self.statement.eval(ctx, _)
         after = self.after_each.eval(ctx, _)
+        # All the jmp offsets right now are a bit odd
         tacs.append(f'label for begin {len(condition) + len(body) + 2};')
         tacs += condition
         tacs.append(f'jmp ahead {len(body) + len(after) + 2} if false;')
         tacs += body
         tacs += after
-        tacs.append(f'jmp back {len(after) + len(body) + len(condition)} always;')
+        tacs.append(f'jmp back {len(after) + len(body) + len(condition) + 2} always;')
         tacs.append('label for end;')
         return tacs
 
@@ -602,7 +603,8 @@ class While(Tacable):
         tacs += predicate
         tacs.append(f'jmp ahead {len(body) + 2} if false;')
         tacs += body
-        tacs.append(f'jmp back {len(body) + len(predicate)} always;')
+        # The below +1 is questionable...
+        tacs.append(f'jmp back {len(body) + len(predicate) + 2} always;')
         tacs.append('label while end;')
         return tacs
 

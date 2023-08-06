@@ -112,10 +112,12 @@ void main(){
     output = 0.5;
     output = sin(output);
     for (i1 i = 0; i < 4; i += 1;) {
-        i = i;
+        output[i] = 4;
     }
-    while (i) {
-        i = 0;
+    i = 20;
+    while (i < 25) {
+        output[i] = 5;
+        i += 1;
     }
 }
 '''

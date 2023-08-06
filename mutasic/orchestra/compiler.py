@@ -248,11 +248,11 @@ class Context:
         break_indices = [] # 2-tuples of (final address, current position)
         cont_indices = []
         remove_indices = []
-        equivalent_location = 0
-        old_locations = [-1] * len(tacs) # Replace old locations in jmps with new ones
+        equivalent_location = 1
+        old_locations = [0] * (len(tacs) + 1) # Replace old locations in jmps with new ones
         old_jmps = []
         # Repoint relative moves
-        print('\n\nOLDTACS' + '\n'.join(tacs))
+        print('\n\nOLDTACS\n' + '\n'.join(tacs))
         for i, tac in enumerate(tacs):
             if tac.startswith('enter scope'):
                 # stack.append(stack_size)
@@ -373,8 +373,9 @@ class Context:
                 if i > 0 and tacs[i - 1].startswith('push'):
                     remove_indices += [i - 1, i]
                     equivalent_location -= 2
-            old_locations[i] = equivalent_location
+            old_locations[i + 1] = equivalent_location
             equivalent_location += 1
+        print(f'\n{old_locations}\n')
         # Repoint jumps to recalculated positions
         for i in old_jmps:
             old_tac = tacs[i]
@@ -383,13 +384,13 @@ class Context:
                 old_offset = int(tail[:tail.find(' ')])
                 old_i = i + old_offset
                 new_i = old_locations[old_i]
-                new_offset = new_i - old_locations[i] + 1
+                new_offset = new_i - old_locations[i]
             else:
                 tail = old_tac[9:]
                 old_offset = int(tail[:tail.find(' ')])
                 old_i = i - old_offset
                 new_i = old_locations[old_i]
-                new_offset = old_locations[i] - new_i + 1
+                new_offset = old_locations[i] - new_i
             tacs[i] = tacs[i].replace(str(old_offset), str(new_offset))
         # Remove no longer used opcodes and expand them
         new_tacs = []

@@ -183,7 +183,6 @@ class VM:
             else:
                 raise NameError(f'Unknown variable specifier {words[2]}')
         elif words[1] == 'index':
-            print('RUNNING POP!!!!')
             index = int(popped)
             value = self.stack.pop()
             parent = self.stack.pop()
