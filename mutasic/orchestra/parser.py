@@ -113,7 +113,7 @@ void main(){
     for (i1 i = 0; i < block_size; i += 1;) {
         output[i] = i;
     }
-    f1 bar = 31;
+    f1 bar = 5;
     output = output < bar;
 }
 '''

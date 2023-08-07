@@ -6,6 +6,7 @@ import random
 import numpy as np
 
 class VM:
+    """I think there would need to be a separate instance of this per node."""
     def __init__(self):
         self.stack = []
         self.stack_base = 0

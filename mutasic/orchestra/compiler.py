@@ -3,7 +3,7 @@ from enum import Enum, auto
 import math
 import numbers
 
-from . import ast
+from . import ast, globs
 
 """We have the following types:
 i1, im,
@@ -79,6 +79,7 @@ class Context:
         self.types: dict[str, Type] = {}
         self.num_type: Type = None
         self.keys: dict[str, int] = {}
+        self.next_global = 0
         
         self._setup_builtin_types()
         self._setup_builtin_vars()
@@ -116,28 +117,50 @@ class Context:
         return harm - math.log(1, 1000)
     
     def _setup_builtin_vars(self):
-        self.vars['pi'] = Variable('pi', self.types['f1'], True, math.pi)
-        self.vars['tau'] = Variable('tau', self.types['f1'], True, math.pi * 2)
-        self.vars['e'] = Variable('e', self.types['f1'], True, math.e)
-        self.vars['gamma'] = Variable('gamma', self.types['f1'], True, self._euler_gamma())
-        self.vars['phi'] = Variable('phi', self.types['f1'], True, (1 + 5**.5)/2)
-        self.vars['rt2'] = Variable('rt2', self.types['f1'], True, 2**.5)
-        self.vars['rthalf'] = Variable('rthalf', self.types['f1'], True, .5**.5)
-        self.vars['block_size'] = Variable('block_size', self.types['i1'], True, 64)
-        self.vars['sample_rate'] = Variable('sample_rate', self.types['i1'], True, 44100)
-        self.vars['n_channels'] = Variable('n_channels', self.types['i1'], True, 1)
-        self.vars['glob_time'] = Variable('glob_time', self.types['im'], True, rate=2)
-        self.vars['active_notes'] = Variable('active_notes', self.types['i1'], True, rate=2)
-        self.vars['note_num'] = Variable('note_num', self.types['i1'], True, rate=1)
-        self.vars['note_octlets'] = Variable('note_octlets', self.types['i1'], True, rate=1)
-        self.vars['note_amp'] = Variable('note_amp', self.types['f1'], True, rate=1)
-        self.vars['note_extra_num'] = Variable('note_extra_num', self.types['i1'], True, rate=1)
-        self.vars['note_extra'] = Variable('note_extra', self.types['i1[]'], True, rate=1)
-        self.vars['note_voice'] = Variable('note_voice', self.types['i1'], True, rate=1)
-        self.vars['note_time'] = Variable('note_time', self.types['im'], True, rate=2)
-        self.vars['note_dead_time'] = Variable('note_dead_time', self.types['im'], True, rate=2)
-        self.vars['output'] = Variable('output', self.types['fm'], False, rate=2)
-        self.vars['keep_alive'] = Variable('keep_alive', self.types['i1'], False, rate=2)
+        """If the order of these variables ever changes, constants would
+        need to change, too.
+        """
+        # Math constants
+        self.vars['pi'] =               Variable('pi', self.types['f1'], True, math.pi)
+        self.vars['tau'] =              Variable('tau', self.types['f1'], True, math.pi * 2)
+        self.vars['e'] =                Variable('e', self.types['f1'], True, math.e)
+        self.vars['gamma'] =            Variable('gamma', self.types['f1'], True, self._euler_gamma())
+        self.vars['phi'] =              Variable('phi', self.types['f1'], True, (1 + 5**.5)/2)
+        self.vars['rt2'] =              Variable('rt2', self.types['f1'], True, 2**.5)
+        self.vars['rthalf'] =           Variable('rthalf', self.types['f1'], True, .5**.5)
+        # Global constants
+        self.vars['block_size'] =       Variable('block_size', self.types['i1'], True, 64)
+        self.vars['sample_rate'] =      Variable('sample_rate', self.types['i1'], True, 44100)
+        self.vars['n_channels'] =       Variable('n_channels', self.types['i1'], True, 1)
+        # Global inputs
+        self.vars['glob_time'] =        Variable('glob_time', self.types['im'], True, rate=2)
+        self.vars['active_notes'] =     Variable('active_notes', self.types['i1'], True, rate=2)
+        # Per-note constants
+        self.vars['note_num'] =         Variable('note_num', self.types['i1'], True, rate=1)
+        self.vars['note_octlets'] =     Variable('note_octlets', self.types['i1'], True, rate=1)
+        self.vars['note_amp'] =         Variable('note_amp', self.types['f1'], True, rate=1)
+        self.vars['note_extra_num'] =   Variable('note_extra_num', self.types['i1'], True, rate=1)
+        self.vars['note_extra'] =       Variable('note_extra', self.types['i1[]'], True, rate=1)
+        self.vars['note_voice'] =       Variable('note_voice', self.types['i1'], True, rate=1)
+        self.vars['suggested_hz'] =     Variable('suggested_hz', self.types['i1'], True, rate=1)
+        # Per-note inputs
+        self.vars['note_time'] =        Variable('note_time', self.types['im'], True, rate=2)
+        self.vars['note_dead_time'] =   Variable('note_dead_time', self.types['im'], True, rate=2)
+        # Outputs
+        self.vars['output'] =           Variable('output', self.types['fm'], False, rate=2)
+        self.vars['keep_alive'] =       Variable('keep_alive', self.types['i1'], False, rate=2)
+        
+        for name, var in self.vars.items():
+            var.location = ('global', globs.__dict__[name])
+        
+        for _, var in self.vars.items():
+            if var.location is not None:
+                self.next_global = max(self.next_global, var.location[1] + 1)
+        
+        for _, var in self.vars.items():
+            if var.location is None:
+                var.location = ('global', self.next_global)
+                self.next_global += 1
     
     def _setup_builtin_funcs(self):
         f1 = self.types['f1']
@@ -212,10 +235,10 @@ class Context:
     
     def eval_program(self, program):
         self.forward_scan_global(program)
-        i = 0
         for var_name, var in self.vars.items():
-            var.location = ('global', i)
-            i += 1
+            if var.location is None:
+                var.location = ('global', self.next_global)
+                self.next_global += 1
             if var.initial_val is None:
                 continue
             if isinstance(var.initial_val, numbers.Number):
