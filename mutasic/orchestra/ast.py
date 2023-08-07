@@ -265,11 +265,6 @@ class Call(HasValue, Tacable):
         return False
     
     def find_broadcast_func(self, ctx, types):
-        # if len(types) == 1 and ctx.is_message(types[0]):
-            # function = ctx.match_function(self.function.name, [types[0].base_type])
-            # if function is not None and function.type.return_type.base_type is None:
-                # return function
-        # return None
         return ctx.match_broadcast_function(self.function.name, types)
     
     def type(self, ctx):
@@ -323,8 +318,6 @@ class Call(HasValue, Tacable):
         For each message argument:
             Pop void; target
         """
-        # if not (len(types) == 1 and types[0].name[1] == 'm'):
-            # raise ValueError('Broadcast not yet supported for general case')
         functype = function.type
         rtype = functype.return_type
         tkey = ctx.upgrade_message(rtype).name
@@ -377,6 +370,8 @@ class Call(HasValue, Tacable):
         tacs += [
             f'push head {len(self.args) + 2} {tkey};',
             f'push returned {tbkey};',
+        ]
+        tacs += [
             'push head 3 i1;',
             f'pop index {tkey};',
             'push const 1 i1;',
@@ -391,55 +386,6 @@ class Call(HasValue, Tacable):
         tacs.append('pop void i1;')
         for arg in reversed(self.args):
             tacs.append(f'pop void {arg.type(ctx).name};')
-        return tacs
-        
-        # Old implementation for reference
-        tacs = self.args[0].eval(ctx, _)
-        # stack = [arg]
-        tacs += [
-            'push const 0 i1;',
-            f'cast i1 {tkey};',
-            # stack = [arg, target]
-            'push const 0 i1;',
-            # stack = [arg, target, index]
-            'push head 1 i1;',
-            # stack = [arg, target, index, index]
-            'push variable block_size i1;',
-            # stack = [arg, target, index, index, block_size]
-            'binary < i1 i1 b1;',
-            # stack = [arg, target, index, condition]
-            'jmp ahead 13 if false;',
-            # stack = [arg, target, index]
-            f'push head 3 {tkey};',
-            # stack = [arg, target, index, arg]
-            'push head 2 i1;',
-            # stack = [arg, target, index, arg, index]
-            f'push index {tkey};',
-            # stack = [arg, target, index, onearg]
-            f'call fixed {self.function.name} {rtype.name} {tbkey};',
-            f'pop void {tbkey};',
-            # stack = [arg, target, index]
-            f'push head 2 {tkey}',
-            # stack = [arg, target, index, target]
-            f'push returned {tbkey};',
-            # stack = [arg, target, index, target, result]
-            'push head 3 i1;',
-            # stack = [arg, target, index, target, result, index]
-            f'pop index {tkey};',
-            # stack = [arg, target, index]
-            'push const 1 i1;',
-            # stack = [arg, target, index, 1]
-            'binary + i1 i1 i1;',
-            # stack = [arg, target, index incremented]
-            'jmp back 15 always;',
-            # stack = [args, target, index]
-            'pop void i1;',
-            # stack = [args, target]
-            f'swap 1 {tkey} {tkey};',
-            # stack = [target, args]
-            f'pop void {tkey};'
-            # stack = [target]
-        ]
         return tacs
     
     def eval(self, ctx, _):

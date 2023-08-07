@@ -194,7 +194,7 @@ class Context:
         self.funcs['pow', (f1.name, f1.name)] = Function('pow', 'pow', f2f) # Native
         self.funcs['pow', (c1.name, f1.name)] = Function('pow', 'pow', c1f1c)
         self.funcs['urand', ()] = Function('urand', 'urand', f) # Native
-        self.funcs['urands', ()] = Function('urands', 'urands', fs)
+        self.funcs['urands', ()] = Function('urands', 'urands', fs) # No argument, so we cannot broadcast or overload.
         self.funcs['ceil', (f1.name,)] = Function('ceil', 'ceil', f1i)
         self.funcs['floor', (f1.name,)] = Function('floor', 'floor', f1i)
         self.funcs['min', (f1.name, f1.name)] = Function('min', 'min', f2f)
@@ -203,6 +203,7 @@ class Context:
         self.funcs['writebuf', (i1.name, i1.name, f1.name)] = Function('writebuf', 'writebuf', write_t) # Native
     
     def match_function(self, name, types):
+        """Find the best function that accepts the provided arguments."""
         best = None
         for key, value in self.funcs.items():
             if key[0] != name:
@@ -226,6 +227,9 @@ class Context:
         return best
     
     def match_broadcast_function(self, name, types):
+        """Find a function for the provided arguments, but allow broadcasting.
+        I.e. function argument scalar types can match provided message types.
+        """
         best = None
         best_score = 0
         for key, value in self.funcs.items():
@@ -261,6 +265,7 @@ class Context:
         return best
     
     def forward_scan_global(self, program):
+        """Accumulate the global variables and functions."""
         for tl in program:
             tl.scan_scope(self, self.vars)
         
@@ -291,6 +296,7 @@ class Context:
                 continue
             self.eval_function(func)
         # print(list(self.funcs.keys()))
+        # This is just arbitrary for testing.
         return self.funcs['main', ()].code
     
     def eval_function(self, func):
@@ -319,7 +325,7 @@ class Context:
         # Repoint relative moves
         for i, tac in enumerate(tacs):
             if tac.startswith('enter scope'):
-                # stack.append(stack_size)
+                # Move the stack pointer forward.
                 stack_vars = tac[:-1].split()[2:]
                 types = []
                 for j, stack_var in enumerate(stack_vars):
@@ -334,6 +340,7 @@ class Context:
                     remove_indices.append(i)
                     equivalent_location -= 1
             elif tac.startswith('exit scope'):
+                # Move the stack pointer back.
                 stack_vars = tac[:-1].split()[2:]
                 types = []
                 for stack_var in stack_vars:
@@ -352,6 +359,7 @@ class Context:
                     equivalent_location -= 1
                 stack_size = old_stack_size
             elif tac.startswith('push variable') or tac.startswith('pop variable'):
+                # Transform variable into usable quasi-asm.
                 action, _, varname, typename = tac[:-1].split()
                 if varname in function_scope:
                     # Function parameter
@@ -370,12 +378,18 @@ class Context:
                 else:
                     raise Exception(f'{varname} was not found in any scope')
             elif tac.startswith('label for begin') or tac == 'label while begin;':
+                """Loops prooved a bit tricky, but keep track of where they
+                start and end.
+                """
                 break_indices.append([])
                 cont_indices.append([])
                 last_loop_labels.append((equivalent_location, len(stack), tac[:-1].split()[1:], i))
                 equivalent_location -= 1
                 remove_indices.append(i)
             elif tac == 'continue;':
+                """For while loops, continue jumps to the start of the loop,
+                but for for loops, it jumps to the "after" action.
+                """
                 jmp_back_to, old_stack_size, loop, start_i = last_loop_labels[-1]
                 stack_types = []
                 for j in range(len(stack) - old_stack_size):
@@ -395,6 +409,7 @@ class Context:
                     cont_indices[-1].append((i, old_locations[i], contloc))
                     tacs[i] = tac
             elif tac == 'break;':
+                # Break always goes right past the end of the loop.
                 jmp_back_to, old_stack_size, loop, _ = last_loop_labels[-1]
                 stack_types = []
                 for j in range(len(stack) - old_stack_size):
@@ -408,6 +423,7 @@ class Context:
                 tacs[i] = tac
                 break_indices[-1].append((i, equivalent_location))
             elif tac == 'label for end;' or tac == 'label while end;':
+                # Repoint accumulated breaks and continues.
                 breaks = break_indices.pop()
                 conts = cont_indices.pop()
                 for current, final in breaks:
@@ -422,6 +438,7 @@ class Context:
             elif tac.startswith('jmp'):
                 old_jmps.append(i)
             elif tac.startswith('return'):
+                # Return needs to discard any nested stacks.
                 new_instrs = 0
                 tac = ''
                 typename = tac[7:-1]
@@ -495,6 +512,7 @@ class Context:
         return typ.clazz == TypeClass.scalar
     
     def upgrade_message(self, typ):
+        """Transform a scalar type to a corresponding message type."""
         if not self.is_scalar(typ):
             raise TypeError(f'Type {typ.name} is not a scalar')
         for candidate in self.types.values():
@@ -503,6 +521,7 @@ class Context:
         raise TypeError(f'No message type for {typ.name}')
     
     def upgrade_array(self, typ):
+        """Increase the array dimensionality of a type."""
         name = typ.name + '[]'
         if name in self.types:
             return self.types[name]
@@ -535,14 +554,6 @@ class Context:
             return None
         return None
     
-    # def _common_base(self, base1, base2):
-        # if base1 == base2:
-            # return base1
-        # for base in 'cfib':
-            # if base == base1 or base == base2:
-                # return base
-        # return None
-    
     def _common_scalar(self, left, right):
         while not self.is_scalar(left):
             left = left.base_type
@@ -552,20 +563,6 @@ class Context:
             if left == cmp or right == cmp:
                 return cmp
         return None
-    
-    # def _get_or_make_type(self, base, mod):
-        # if mod in '1m':
-            # return self.types[base + mod]
-        # # Arrays
-        # key = base + mod
-        # if key in self.types:
-            # return self.types[key]
-        # previous = key[:-2]
-        # base_type = self._get_or_make_type(base, previous)
-        # length = Variable(f'{key}.length', self.types['i1'], True)
-        # new_type = Type(key, {}, {'length': length}, base_type=base_type)
-        # self.types[key] = new_type
-        # return new_type
     
     def type_for(self, typ, clazz):
         # TODO multidim arrays
@@ -594,10 +591,7 @@ class Context:
                 return (self.types['bm'], self.upgrade_message(common_scalar), common_scalar)
             elif left_mod != right_mod:
                 return None
-            # base = self._common_base(left_base, right_base)
-            # common_type = self._get_or_make_type(base, left_mod)
             common_type = self.type_for(common_scalar, tl.clazz)
-            # bool_type = self._get_or_make_type('b', left_mod)
             bool_type = self.type_for(self.types['b1'], tl.clazz)
             return (bool_type, common_type, common_type)
         elif op in ('||', '&&'):
@@ -626,11 +620,7 @@ class Context:
             elif tl.clazz == tr.clazz:
                 if op in ('|', '&', '^', '<<', '>>'):
                     # These ops must take and return integers
-                    # common_base = 'i'
                     common_scalar = self.types['i1']
-                # else:
-                    # common_base = self._common_base(left_base, right_base)
-                # common_type = self._get_or_make_type(common_base, left_mod)
                 common_type = self.type_for(common_scalar, tl.clazz)
                 return (common_type, common_type, common_type)
             return None
@@ -640,7 +630,6 @@ class Context:
             return (t, t)
         elif op == '~':
             # Must be integers
-            # itype = self._get_or_make_type('i', t.name[1:])
             itype = self.type_for(self.types['i1'], t.clazz)
             return (itype, itype)
         elif op == '!':
