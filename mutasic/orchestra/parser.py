@@ -109,17 +109,12 @@ def test():
     p = gen_parser()
     txt = '''
 void main(){
-    output = 0.5;
-    for (i1 i = 0; i < 10; i += 1;) {
-        if (i == 2) {
-            output[2] = 10;
-        } else if (i == 1) {
-            output[5] = 10;
-        } else {
-            output[i] = i;
-        }
+    output = 0;
+    for (i1 i = 0; i < block_size; i += 1;) {
+        output[i] = i;
     }
-    i = 0;
+    f1 bar = 31;
+    output = output < bar;
 }
 '''
     m = p(txt)

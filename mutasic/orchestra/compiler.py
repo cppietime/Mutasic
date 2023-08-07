@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum, auto
 import math
 import numbers
 
@@ -33,12 +34,18 @@ keep_alive: i1
 FunctionSig = tuple[str, tuple['Type', ...]]
 Scope = dict[str, 'Variable']
 
+class TypeClass(Enum):
+    scalar = auto()
+    message = auto()
+    array = auto()
+
 @dataclass
 class Type:
     name: str
     methods: dict[FunctionSig, 'Function']
     fields: dict[str, 'Variable']
     is_function: bool = False
+    clazz: TypeClass = TypeClass.scalar
     base_type: 'Type' = None
     return_type: 'Type' = None
     args_types: list['Type'] = None
@@ -80,25 +87,25 @@ class Context:
     def _setup_builtin_types(self):
         void = self.types['void'] = Type('void', {}, {})
         i1 = self.types['i1'] = Type('i1', {}, {})
-        im = self.types['im'] = Type('im', {}, {}, base_type=i1)
+        im = self.types['im'] = Type('im', {}, {}, base_type=i1, clazz=TypeClass.message)
         i1_len = Variable('i1[].length', i1, True)
-        iarr = self.types['i1[]'] = Type('i1[]', {}, {'length': i1_len}, base_type=i1)
+        iarr = self.types['i1[]'] = Type('i1[]', {}, {'length': i1_len}, base_type=i1, clazz=TypeClass.array)
         f1 = self.types['f1'] = Type('f1', {}, {})
-        fm = self.types['fm'] = Type('fm', {}, {}, base_type=f1)
+        fm = self.types['fm'] = Type('fm', {}, {}, base_type=f1, clazz=TypeClass.message)
         f1_len = Variable('f1[].length', i1, True)
-        farr = self.types['f1[]'] = Type('f1[]', {}, {'length': f1_len}, base_type=f1)
+        farr = self.types['f1[]'] = Type('f1[]', {}, {'length': f1_len}, base_type=f1, clazz=TypeClass.array)
         b1 = self.types['b1'] = Type('b1', {}, {})
-        bm = self.types['bm'] = Type('bm', {}, {}, base_type=b1)
+        bm = self.types['bm'] = Type('bm', {}, {}, base_type=b1, clazz=TypeClass.message)
         b1_len = Variable('b1[].length', i1, True)
-        barr = self.types['b1[]'] = Type('b1[]', {}, {'length': b1_len}, base_type=b1)
+        barr = self.types['b1[]'] = Type('b1[]', {}, {'length': b1_len}, base_type=b1, clazz=TypeClass.array)
         c1 = self.types['c1'] = Type('c1', {}, {
             'real': Variable('c1.real', f1, True),
             'imag': Variable('c1.imag', f1, True),
         })
-        cm = self.types['cm'] = Type('cm', {}, {}, base_type=c1)
+        cm = self.types['cm'] = Type('cm', {}, {}, base_type=c1, clazz=TypeClass.message)
         carr = self.types['c1[]'] = Type('c1[]', {}, {
             'length': Variable('c1[].length', i1, True),
-        }, base_type=c1)
+        }, base_type=c1, clazz=TypeClass.array)
         
         self.num_type = f1
     
@@ -252,7 +259,6 @@ class Context:
         old_locations = [0] * (len(tacs) + 1) # Replace old locations in jmps with new ones
         old_jmps = []
         # Repoint relative moves
-        print('\n\nOLDTACS\n' + '\n'.join(tacs))
         for i, tac in enumerate(tacs):
             if tac.startswith('enter scope'):
                 # stack.append(stack_size)
@@ -424,6 +430,31 @@ class Context:
             self.vars.pop(local)
         return tacs
     
+    def is_message(self, typ):
+        return typ.clazz == TypeClass.message
+    
+    def is_scalar(self, typ):
+        return typ.clazz == TypeClass.scalar
+    
+    def upgrade_message(self, typ):
+        if not self.is_scalar(typ):
+            raise TypeError(f'Type {typ.name} is not a scalar')
+        for candidate in self.types.values():
+            if self.is_message(candidate) and candidate.base_type == typ:
+                return candidate
+        raise TypeError(f'No message type for {typ.name}')
+    
+    def upgrade_array(self, typ):
+        name = typ.name + '[]'
+        if name in self.types:
+            return self.types[name]
+        fields = {'length': Variable(f'{name}.length', self.types['i1'], True)}
+        newtyp = Type(typ.name + '[]', methods, fields, clazz=TypeClass.array, base_type=typ)
+        if name in self.types:
+            raise TypeError(f'Conflicting type {name} already exists')
+        self.types[name] = newtyp
+        return newtyp
+    
     def cast_to(self, ta, tb):
         """If ta can be cast to tb, return tb. Otherwise, return None.
         """
@@ -431,42 +462,61 @@ class Context:
             return None
         ta_mod = ta.name[1:]
         tb_mod = tb.name[1:]
-        if ta_mod == tb_mod:
+        if ta.clazz == tb.clazz:
             # All elementary types can be cast if needed.
             return tb
-        elif tb_mod == '1[]':
-            if ta_mod == '1':
+        elif tb.clazz == TypeClass.array and self.is_scalar(tb.base_type):
+            if self.is_scalar(ta):
                 # Single values can be cast to an array to fill it.
                 return tb
             return None
-        elif tb_mod == 'm':
-            if ta_mod == '1':
+        elif self.is_message(tb):
+            if self.is_scalar(ta):
                 # Single values can be cast to fill a message block.
                 return tb
             return None
         return None
     
-    def _common_base(self, base1, base2):
-        if base1 == base2:
-            return base1
-        for base in 'cfib':
-            if base == base1 or base == base2:
-                return base
+    # def _common_base(self, base1, base2):
+        # if base1 == base2:
+            # return base1
+        # for base in 'cfib':
+            # if base == base1 or base == base2:
+                # return base
+        # return None
+    
+    def _common_scalar(self, left, right):
+        while not self.is_scalar(left):
+            left = left.base_type
+        while not self.is_scalar(right):
+            right = right.base_type
+        for cmp in (self.types['c1'], self.types['f1'], self.types['i1'], self.types['b1']):
+            if left == cmp or right == cmp:
+                return cmp
         return None
     
-    def _get_or_make_type(self, base, mod):
-        if mod in '1m':
-            return self.types[base + mod]
-        # Arrays
-        key = base + mod
-        if key in self.types:
-            return self.types[key]
-        previous = key[:-2]
-        base_type = self._get_or_make_type(base, previous)
-        length = Variable(f'{key}.length', self.types['i1'], True)
-        new_type = Type(key, {}, {'length': length}, base_type=base_type)
-        self.types[key] = new_type
-        return new_type
+    # def _get_or_make_type(self, base, mod):
+        # if mod in '1m':
+            # return self.types[base + mod]
+        # # Arrays
+        # key = base + mod
+        # if key in self.types:
+            # return self.types[key]
+        # previous = key[:-2]
+        # base_type = self._get_or_make_type(base, previous)
+        # length = Variable(f'{key}.length', self.types['i1'], True)
+        # new_type = Type(key, {}, {'length': length}, base_type=base_type)
+        # self.types[key] = new_type
+        # return new_type
+    
+    def type_for(self, typ, clazz):
+        # TODO multidim arrays
+        # Invariant is that scalar type already exists
+        if clazz == TypeClass.array:
+            typ = self.upgrade_array(typ)
+        elif clazz == TypeClass.message:
+            typ = self.upgrade_message(typ)
+        return typ
     
     def binop_types(self, op, tl, tr):
         """If tl op tr is a valid operation, return a 3-tuple of:
@@ -476,44 +526,54 @@ class Context:
         tln, trn = tl.name, tr.name
         left_base, left_mod = tln[:1], tln[1:]
         right_base, right_mod = trn[:1], trn[1:]
+        common_scalar = self._common_scalar(tl, tr)
+        lrc = (tl.clazz, tr.clazz)
         if op in ('==', '!=', '<=', '>=', '<', '>'):
             # Can compare any types of same dimension
-            if left_mod != right_mod:
+            if lrc == (TypeClass.scalar, TypeClass.message):
+                return (self.types['bm'], common_scalar, self.upgrade_message(common_scalar))
+            elif lrc == (TypeClass.message, TypeClass.scalar):
+                return (self.types['bm'], self.upgrade_message(common_scalar), common_scalar)
+            elif left_mod != right_mod:
                 return None
-            base = self._common_base(left_base, right_base)
-            common_type = self._get_or_make_type(base, left_mod)
-            bool_type = self._get_or_make_type('b', left_mod)
+            # base = self._common_base(left_base, right_base)
+            # common_type = self._get_or_make_type(base, left_mod)
+            common_type = self.type_for(common_scalar, tl.clazz)
+            # bool_type = self._get_or_make_type('b', left_mod)
+            bool_type = self.type_for(self.types['b1'], tl.clazz)
             return (bool_type, common_type, common_type)
         elif op in ('||', '&&'):
             # Operands must be cast to bool before opearting in this case
             if left_mod != right_mod:
                 return None
-            bool_type = self._get_or_make_type('b', left_mod)
+            bool_type = self.type_for(self.types['b1'], tl.clazz)
             return (bool_type, bool_type, bool_type)
         else:
             # All other binary ops should act the same
-            if (left_mod, right_mod) == ('1', '1[]'):
+            if lrc == (TypeClass.scalar, TypeClass.array) and self.is_scalar(tr.base_type):
                 # Broadcast scalar to an array
-                return (tr, self.types[trn[:2]], tr)
-            elif (left_mod, right_mod) == ('1[]', '1'):
+                return (tr, self.upgrade_message(tl), tr)
+            elif lrc == (TypeClass.array, TypeClass.scalar) and self.is_scalar(tl.base_type):
                 # Broadcast scalar to an array
-                return (tl, tl, self.types[tln[:2]])
-            elif (left_mod, right_mod) == ('1', 'm'):
+                return (tl, tl, self.upgrade_message(tr))
+            elif lrc == (TypeClass.scalar, TypeClass.message) and self.is_scalar(tr.base_type):
                 # Broadcast scalar to a block
-                return (tr, self.types[trn[1] + '1'], tr)
-            elif (left_mod, right_mod) == ('m', '1'):
+                return (tr, tr.base_type, tr)
+            elif lrc == (TypeClass.message, TypeClass.scalar) and self.is_scalar(tl.base_type):
                 # Broadcast scalar to a block
-                return (tl, tl, self.types[tln[0] + '1'])
-            elif '[]' in left_mod or '[]' in right_mod:
+                return (tl, tl, tl.base_type)
+            elif TypeClass.array in lrc:
                 # Do not support binary operations on arrays otherwise
                 return None
-            elif left_mod == right_mod:
+            elif tl.clazz == tr.clazz:
                 if op in ('|', '&', '^', '<<', '>>'):
                     # These ops must take and return integers
-                    common_base = 'i'
-                else:
-                    common_base = self._common_base(left_base, right_base)
-                common_type = self._get_or_make_type(common_base, left_mod)
+                    # common_base = 'i'
+                    common_scalar = self.types['i1']
+                # else:
+                    # common_base = self._common_base(left_base, right_base)
+                # common_type = self._get_or_make_type(common_base, left_mod)
+                common_type = self.type_for(common_scalar, tl.clazz)
                 return (common_type, common_type, common_type)
             return None
     
@@ -522,8 +582,9 @@ class Context:
             return (t, t)
         elif op == '~':
             # Must be integers
-            itype = self._get_or_make_type('i', t.name[1:])
+            # itype = self._get_or_make_type('i', t.name[1:])
+            itype = self.type_for(self.types['i1'], t.clazz)
             return (itype, itype)
         elif op == '!':
-            return (self._get_or_make_type('b', t.name[1:]), t)
+            return (self.type_for(self.types['bl'], t.clazz), t)
         raise NameError(f'Unknown unary operator {op}')
