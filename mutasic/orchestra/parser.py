@@ -102,7 +102,7 @@ def gen_parser():
             (expr + semicolon).map(ExprStmt))
         params = (type_ + id_) // comma # [[type, id], [type, id], ...]
         funcdef = sb.concatenate(type_, id_, lpar.suppress(), params.optional().wrap(), rpar.suppress(), block).map(Funcdef)
-        program = (ignore.suppress() + (funcdef | vardec).some()).extract()
+        program = sb.concatenate(ignore.suppress(), (funcdef | vardec).some()).then(sb.end().function).extract()
     return program
 
 def test():
@@ -120,6 +120,10 @@ void main(){
     m = p(txt)
     print(m)
     print(f'{m.position} vs {len(txt)}')
+    if m.is_error:
+        m.report_error()
+        print(f'Error at {txt[max(0, m.position-8):m.position+8]}')
+        return
     print(txt[m.position:])
     ctx = compiler.Context()
     print('Program:\n\n', '\n'.join(ctx.eval_program(m.result)))
