@@ -264,6 +264,13 @@ class Call(HasValue, Tacable):
     def is_constant(self, ctx):
         return False
     
+    def find_broadcast_func(self, ctx, types):
+        if len(types) == 1 and ctx.is_message(types[0]):
+            function = ctx.match_function(self.function.name, [types[0].base_type])
+            if function is not None and function.type.return_type.base_type is None:
+                return function
+        return None
+    
     def type(self, ctx):
         name = self.function.name
         if name in ctx.types:
@@ -277,13 +284,69 @@ class Call(HasValue, Tacable):
         function = ctx.match_function(name, types)
         if function is None:
             # Special broadcast case
-            if len(types) == 1 and types[0].name[1] == 'm':
-                function = ctx.match_function(name, [types[0].base_type])
-                if function is not None and function.type.return_type.base_type is None:
-                    return ctx.types[function.type.return_type.name[:1] + 'm']
+            function = self.find_broadcast_func(ctx, types)
+            if function is not None:
+                return ctx.upgrade_message(function.type.return_type)
             raise NameError(f'No function found named {name} for {types}')
         rt = function.type.return_type
         return rt
+    
+    def broadcast(self, ctx, types, function, _):
+        if not (len(types) == 1 and types[0].name[1] == 'm'):
+            raise ValueError('Broadcast not yet supported for general case')
+        function = ctx.match_function(self.function.name, [types[0].base_type])
+        tkey = types[0].name
+        tbkey = types[0].base_type.name
+        functype = function.type
+        rtype = functype.return_type
+        if function is not None and rtype.base_type is None:
+            tacs = self.args[0].eval(ctx, _)
+            # stack = [arg]
+            tacs += [
+                'push const 0 i1;',
+                f'cast i1 {tkey};',
+                # stack = [arg, target]
+                'push const 0 i1;',
+                # stack = [arg, target, index]
+                'push head 1 i1;',
+                # stack = [arg, target, index, index]
+                'push variable block_size i1;',
+                # stack = [arg, target, index, index, block_size]
+                'binary < i1 i1 b1;',
+                # stack = [arg, target, index, condition]
+                'jmp ahead 13 if false;',
+                # stack = [arg, target, index]
+                f'push head 3 {tkey};',
+                # stack = [arg, target, index, arg]
+                'push head 2 i1;',
+                # stack = [arg, target, index, arg, index]
+                f'push index {tkey};',
+                # stack = [arg, target, index, onearg]
+                f'call fixed {self.function.name} {rtype.name} {tbkey};',
+                f'pop void {tbkey};',
+                # stack = [arg, target, index]
+                f'push head 2 {tkey}',
+                # stack = [arg, target, index, target]
+                f'push returned {tbkey};',
+                # stack = [arg, target, index, target, result]
+                'push head 3 i1;',
+                # stack = [arg, target, index, target, result, index]
+                f'pop index {tkey};',
+                # stack = [arg, target, index]
+                'push const 1 i1;',
+                # stack = [arg, target, index, 1]
+                'binary + i1 i1 i1;',
+                # stack = [arg, target, index incremented]
+                'jmp back 15 always;',
+                # stack = [args, target, index]
+                'pop void i1;',
+                # stack = [args, target]
+                f'swap 1 {tkey} {tkey};',
+                # stack = [target, args]
+                f'pop void {tkey};'
+                # stack = [target]
+            ]
+            return tacs
     
     def eval(self, ctx, _):
         if not isinstance(self.function, Variable):
@@ -299,60 +362,9 @@ class Call(HasValue, Tacable):
         function = ctx.match_function(name, types)
         if function is None:
             # Special broadcast case
-            if len(types) == 1 and types[0].name[1] == 'm':
-                function = ctx.match_function(name, [types[0].base_type])
-                tkey = types[0].name
-                tbkey = types[0].base_type.name
-                functype = function.type
-                rtype = functype.return_type
-                if function is not None and rtype.base_type is None:
-                    tacs = self.args[0].eval(ctx, _)
-                    # stack = [arg]
-                    tacs += [
-                        'push const 0 i1;',
-                        f'cast i1 {tkey};',
-                        # stack = [arg, target]
-                        'push const 0 i1;',
-                        # stack = [arg, target, index]
-                        'push head 1 i1;',
-                        # stack = [arg, target, index, index]
-                        'push variable block_size i1;',
-                        # stack = [arg, target, index, index, block_size]
-                        'binary < i1 i1 b1;',
-                        # stack = [arg, target, index, condition]
-                        'jmp ahead 13 if false;',
-                        # stack = [arg, target, index]
-                        f'push head 3 {tkey};',
-                        # stack = [arg, target, index, arg]
-                        'push head 2 i1;',
-                        # stack = [arg, target, index, arg, index]
-                        f'push index {tkey};',
-                        # stack = [arg, target, index, onearg]
-                        f'call fixed {name} {rtype.name} {tbkey};',
-                        f'pop void {tbkey};',
-                        # stack = [arg, target, index]
-                        f'push head 2 {tkey}',
-                        # stack = [arg, target, index, target]
-                        f'push returned {tbkey};',
-                        # stack = [arg, target, index, target, result]
-                        'push head 3 i1;',
-                        # stack = [arg, target, index, target, result, index]
-                        f'pop index {tkey};',
-                        # stack = [arg, target, index]
-                        'push const 1 i1;',
-                        # stack = [arg, target, index, 1]
-                        'binary + i1 i1 i1;',
-                        # stack = [arg, target, index incremented]
-                        'jmp back 15 always;',
-                        # stack = [args, target, index]
-                        'pop void i1;',
-                        # stack = [args, target]
-                        f'swap 1 {tkey} {tkey};',
-                        # stack = [target, args]
-                        f'pop void {tkey};'
-                        # stack = [target]
-                    ]
-                    return tacs
+            function = self.find_broadcast_func(ctx, types)
+            if function is not None:
+                return self.broadcast(ctx, types, function, _)
             raise NameError(f'No function found named {name} for {", ".join([t.name for t in types])}')
         tacs = []
         return_type = function.type.return_type
