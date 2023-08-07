@@ -386,7 +386,7 @@ class Assignment(HasValue, Tacable):
         lt, rt = lhs.type(ctx), rhs.type(ctx)
         return lt
     
-    def eval(self, ctx, _):
+    def eval(self, ctx, _, root=False):
         sources = self.targets[1:] + [self.value]
         tacs = []
         for target, source, op in reversed(tuple(zip(self.targets, sources, self.ops))):
@@ -395,7 +395,8 @@ class Assignment(HasValue, Tacable):
             else:
                 binop = LeftAssocBinOp([target, [[op[0], source]]])
                 tacs += target.assign_to(ctx, _, binop)
-        tacs += self.targets[0].eval(ctx, _)
+        if not root:
+            tacs += self.targets[0].eval(ctx, _)
         return tacs
 
 class Variable(HasValue, Tacable, Assignable):
@@ -666,19 +667,22 @@ class ExprStmt(Tacable):
         self.expr = r[0]
     
     def eval(self, ctx, _):
-        tacs = self.expr.eval(ctx, _)
-        """In some cases this will need to be optimized away.
-        push X t;
-        pop void t;
-        can annihilate each other, and
-        push X void;
-        should never occur, though function calls that return void
-        will push nothing.
-        pop void void;
-        will be added when the expression is void, e.g. void function calls;
-        this can just be omitted always.
-        """
-        tacs.append(f'pop void {self.expr.type(ctx).name};')
+        if isinstance(self.expr, Assignment):
+            tacs = self.expr.eval(ctx, _, True)
+        else:
+            """In some cases this will need to be optimized away.
+            push X t;
+            pop void t;
+            can annihilate each other, and
+            push X void;
+            should never occur, though function calls that return void
+            will push nothing.
+            pop void void;
+            will be added when the expression is void, e.g. void function calls;
+            this can just be omitted always.
+            """
+            tacs = self.expr.eval(ctx, _)
+            tacs.append(f'pop void {self.expr.type(ctx).name};')
         return tacs
 
 class BlockStmt:

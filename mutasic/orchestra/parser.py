@@ -110,13 +110,14 @@ def test():
     txt = '''
 void main(){
     output = 0.5;
-    i1 i = 1;
-    if (i == 2) {
-        output[2] = 10;
-    } else if (i == 1) {
-        output[5] = 10;
-    } else {
-        output[0] = 100;
+    for (i1 i = 0; i < 10; i += 1;) {
+        if (i == 2) {
+            output[2] = 10;
+        } else if (i == 1) {
+            output[5] = 10;
+        } else {
+            output[i] = i;
+        }
     }
     i = 0;
 }
@@ -134,6 +135,7 @@ void main(){
     vm.global_vars = [0] * len(ctx.vars)
     vm.run()
     print(vm.global_vars[ctx.vars['output'].location[1]])
+    assert not vm.stack
 
 if __name__ == '__main__':
     test()
