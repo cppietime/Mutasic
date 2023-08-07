@@ -225,6 +225,41 @@ class Context:
                 return value
         return best
     
+    def match_broadcast_function(self, name, types):
+        best = None
+        best_score = 0
+        for key, value in self.funcs.items():
+            if key[0] != name:
+                continue
+            if len(key[1]) != len(types):
+                continue
+            num_cast = 0
+            num_bc = 0
+            works = True
+            for p, t in zip(key[1], types):
+                pt = self.types[p]
+                if self.is_message(t) and not self.is_message(pt):
+                    baset = t.base_type
+                    if self.cast_to(baset, pt) == None:
+                        works = False
+                        break
+                    elif p != baset.name:
+                        num_cast += 1
+                    num_bc += 1
+                else:
+                    if self.cast_to(t, pt) == None:
+                        works = False
+                        break
+                    elif p != t.name:
+                        num_cast += 1
+            if not works:
+                continue
+            score = num_cast + num_bc
+            if best is None or score < best_score:
+                best = value
+                best_score = score
+        return best
+    
     def forward_scan_global(self, program):
         for tl in program:
             tl.scan_scope(self, self.vars)

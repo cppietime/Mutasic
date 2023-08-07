@@ -265,11 +265,12 @@ class Call(HasValue, Tacable):
         return False
     
     def find_broadcast_func(self, ctx, types):
-        if len(types) == 1 and ctx.is_message(types[0]):
-            function = ctx.match_function(self.function.name, [types[0].base_type])
-            if function is not None and function.type.return_type.base_type is None:
-                return function
-        return None
+        # if len(types) == 1 and ctx.is_message(types[0]):
+            # function = ctx.match_function(self.function.name, [types[0].base_type])
+            # if function is not None and function.type.return_type.base_type is None:
+                # return function
+        # return None
+        return ctx.match_broadcast_function(self.function.name, types)
     
     def type(self, ctx):
         name = self.function.name
@@ -292,61 +293,154 @@ class Call(HasValue, Tacable):
         return rt
     
     def broadcast(self, ctx, types, function, _):
-        if not (len(types) == 1 and types[0].name[1] == 'm'):
-            raise ValueError('Broadcast not yet supported for general case')
-        function = ctx.match_function(self.function.name, [types[0].base_type])
-        tkey = types[0].name
-        tbkey = types[0].base_type.name
+        """Basic formula:
+        Push target to receive result ; target
+        For each argument:
+            Push argument ; target, args
+        Push index=0 ; target, args, index
+        Begin loop:
+        Dup index; target, args, index, index
+        Push block_size; target, args, index, index, block_size
+        If <, exit loop; target, args, index
+        For each argument:
+            if argument is scalar:
+                Push the argument
+            else:
+                Push message arg; ... arg
+                Push index; ... arg, index
+                Push element; ... arg
+        call function; target, args, index, s_args
+        for each argument:
+            Pop void;
+        Push target; target, args, index, target
+        Push result; target, args, index, target, result
+        Push index; target, args, index, target, result, index
+        Pop element; target, args, index
+        Push 1; target, args, index, 1
+        +; target, args, index + 1
+        Jump to start of loop;
+        Pop void; target, args
+        For each message argument:
+            Pop void; target
+        """
+        # if not (len(types) == 1 and types[0].name[1] == 'm'):
+            # raise ValueError('Broadcast not yet supported for general case')
         functype = function.type
         rtype = functype.return_type
-        if function is not None and rtype.base_type is None:
-            tacs = self.args[0].eval(ctx, _)
-            # stack = [arg]
-            tacs += [
-                'push const 0 i1;',
-                f'cast i1 {tkey};',
-                # stack = [arg, target]
-                'push const 0 i1;',
-                # stack = [arg, target, index]
-                'push head 1 i1;',
-                # stack = [arg, target, index, index]
-                'push variable block_size i1;',
-                # stack = [arg, target, index, index, block_size]
-                'binary < i1 i1 b1;',
-                # stack = [arg, target, index, condition]
-                'jmp ahead 13 if false;',
-                # stack = [arg, target, index]
-                f'push head 3 {tkey};',
-                # stack = [arg, target, index, arg]
-                'push head 2 i1;',
-                # stack = [arg, target, index, arg, index]
-                f'push index {tkey};',
-                # stack = [arg, target, index, onearg]
-                f'call fixed {self.function.name} {rtype.name} {tbkey};',
-                f'pop void {tbkey};',
-                # stack = [arg, target, index]
-                f'push head 2 {tkey}',
-                # stack = [arg, target, index, target]
-                f'push returned {tbkey};',
-                # stack = [arg, target, index, target, result]
-                'push head 3 i1;',
-                # stack = [arg, target, index, target, result, index]
-                f'pop index {tkey};',
-                # stack = [arg, target, index]
-                'push const 1 i1;',
-                # stack = [arg, target, index, 1]
-                'binary + i1 i1 i1;',
-                # stack = [arg, target, index incremented]
-                'jmp back 15 always;',
-                # stack = [args, target, index]
-                'pop void i1;',
-                # stack = [args, target]
-                f'swap 1 {tkey} {tkey};',
-                # stack = [target, args]
-                f'pop void {tkey};'
-                # stack = [target]
-            ]
-            return tacs
+        tkey = ctx.upgrade_message(rtype).name
+        tbkey = rtype.name
+        tacs = [
+            'push const 0 i1;',
+            f'cast i1 {tkey};',
+        ]
+        message_args = []
+        for arg in self.args:
+            tacs += arg.eval(ctx, _)
+            message_args.append(ctx.is_message(arg.type(ctx)))
+        tacs.append('push const 0 i1;')
+        begin_loop = len(tacs)
+        tacs += [
+            'push head 1 i1;',
+            'push variable block_size i1;',
+            'binary < i1 i1 b1;',
+        ]
+        jmp = len(tacs)
+        tacs.append('jmp ahead {} if false;')
+        keys = []
+        for i, arg in enumerate(self.args):
+            atyp = arg.type(ctx)
+            ftyp = functype.args_types[i]
+            if message_args[i]:
+                tacs += [
+                    f'push head {len(self.args) + 1} {atyp.name};',
+                    f'push head {i + 2} i1;',
+                    f'push index {atyp.name};',
+                ]
+                keys.append(ftyp.name)
+                if atyp.base_type != ftyp:
+                    cast_type = ctx.cast_to(atyp.base_type, ftyp)
+                    if cast_type is None:
+                        raise TypeError('This shouldnt happen')
+                    tacs.append(f'cast {atyp.base_type.name} {ftyp.name};')
+            else:
+                tacs.append(f'push head {len(self.args) + 1} {atyp.name};')
+                keys.append(ftyp.name)
+                if atyp != ftyp:
+                    cast_type = ctx.cast_to(atyp, ftyp)
+                    if cast_type is None:
+                        raise TypeError('This shouldnt happen')
+                    tacs.append(f'cast {atyp.name} {ftyp.name};')
+                
+        tacs.append(f'call fixed {function.full_name} {rtype.name} {" ".join(keys)};')
+        for key in reversed(keys):
+            tacs.append(f'pop void {key};')
+        tacs += [
+            f'push head {len(self.args) + 2} {tkey};',
+            f'push returned {tbkey};',
+            'push head 3 i1;',
+            f'pop index {tkey};',
+            'push const 1 i1;',
+            'binary + i1 i1 i1;',
+        ]
+        jmp_back = len(tacs)
+        back_offset = jmp_back - begin_loop
+        tacs.append(f'jmp back {back_offset} always;')
+        end_loop = len(tacs)
+        ahead_offset = end_loop - jmp
+        tacs[jmp] = f'jmp ahead {ahead_offset} if false;'
+        tacs.append('pop void i1;')
+        for arg in reversed(self.args):
+            tacs.append(f'pop void {arg.type(ctx).name};')
+        return tacs
+        
+        # Old implementation for reference
+        tacs = self.args[0].eval(ctx, _)
+        # stack = [arg]
+        tacs += [
+            'push const 0 i1;',
+            f'cast i1 {tkey};',
+            # stack = [arg, target]
+            'push const 0 i1;',
+            # stack = [arg, target, index]
+            'push head 1 i1;',
+            # stack = [arg, target, index, index]
+            'push variable block_size i1;',
+            # stack = [arg, target, index, index, block_size]
+            'binary < i1 i1 b1;',
+            # stack = [arg, target, index, condition]
+            'jmp ahead 13 if false;',
+            # stack = [arg, target, index]
+            f'push head 3 {tkey};',
+            # stack = [arg, target, index, arg]
+            'push head 2 i1;',
+            # stack = [arg, target, index, arg, index]
+            f'push index {tkey};',
+            # stack = [arg, target, index, onearg]
+            f'call fixed {self.function.name} {rtype.name} {tbkey};',
+            f'pop void {tbkey};',
+            # stack = [arg, target, index]
+            f'push head 2 {tkey}',
+            # stack = [arg, target, index, target]
+            f'push returned {tbkey};',
+            # stack = [arg, target, index, target, result]
+            'push head 3 i1;',
+            # stack = [arg, target, index, target, result, index]
+            f'pop index {tkey};',
+            # stack = [arg, target, index]
+            'push const 1 i1;',
+            # stack = [arg, target, index, 1]
+            'binary + i1 i1 i1;',
+            # stack = [arg, target, index incremented]
+            'jmp back 15 always;',
+            # stack = [args, target, index]
+            'pop void i1;',
+            # stack = [args, target]
+            f'swap 1 {tkey} {tkey};',
+            # stack = [target, args]
+            f'pop void {tkey};'
+            # stack = [target]
+        ]
+        return tacs
     
     def eval(self, ctx, _):
         if not isinstance(self.function, Variable):

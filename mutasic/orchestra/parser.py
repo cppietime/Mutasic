@@ -109,13 +109,15 @@ def test():
     p = gen_parser()
     txt = '''
 void main(){
-    output = 0;
-    for (i1 i = 0; i < block_size; i += 1;) {
-        output[i] = i;
-    }
-    f1 bar = 0.25;
+    output = sin(0);
     output = sin(output);
-    output = output < bar;
+    fm j = 0;
+    for (i1 i = 0; i < block_size; i += 1;) {
+        output[i] = sin(i);
+        j[i] = sin(pi / 2 - i);
+    }
+    output = max(j, output);
+    output = max(0, output);
 }
 '''
     m = p(txt)

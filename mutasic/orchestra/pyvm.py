@@ -17,6 +17,7 @@ class VM:
         
         self.builtin_funcs = {
             'sin(f1)': self.sin1,
+            'max(f1,f1)': self.max2,
         }
         
         self.block_size = 64
@@ -665,3 +666,8 @@ class VM:
     def sin1(self):
         phase = self.stack[-1]
         self.retval = math.sin(phase)
+    
+    def max2(self):
+        b = self.stack[-1]
+        a = self.stack[-2]
+        self.retval = max(a, b)
